@@ -44,6 +44,12 @@ public class Record
         [MoonSharpHidden]
         set;
     }
+    public int maxCombo
+    {
+        get;
+        [MoonSharpHidden]
+        set;
+    }
     public PerformanceMedal medal
     {
         get;
@@ -80,6 +86,7 @@ public class Record
             fingerprint = fingerprint,
             ruleset = ruleset,
             score = score,
+            maxCombo = maxCombo,
             medal = medal,
             gameVersion = gameVersion
         };
@@ -201,11 +208,16 @@ public class Records : RecordsBase
             new Dictionary<string, Record>();
         recordDict[Options.Ruleset.Legacy] =
             new Dictionary<string, Record>();
-        setlistRecordDict = new Dictionary<Options.Ruleset, 
+        // Custom rulesets save records too (treated like official).
+        recordDict[Options.Ruleset.Custom] =
+            new Dictionary<string, Record>();
+        setlistRecordDict = new Dictionary<Options.Ruleset,
             Dictionary<string, SetlistRecord>>();
         setlistRecordDict[Options.Ruleset.Standard] =
             new Dictionary<string, SetlistRecord>();
         setlistRecordDict[Options.Ruleset.Legacy] =
+            new Dictionary<string, SetlistRecord>();
+        setlistRecordDict[Options.Ruleset.Custom] =
             new Dictionary<string, SetlistRecord>();
 
         setlist = new SetlistMethods() { parent = this };
@@ -214,26 +226,30 @@ public class Records : RecordsBase
     // Returns null if a record doesn't exist.
     public Record GetRecord(Pattern p, Options.Ruleset ruleset)
     {
-        if (ruleset == Options.Ruleset.Custom)
-        {
-            return null;
-        }
-        Dictionary<string, Record> dict = recordDict[ruleset];
-        if (!dict.ContainsKey(p.patternMetadata.guid))
-        {
-            return null;
-        }
-
-        Record r = dict[p.patternMetadata.guid];
         if (string.IsNullOrEmpty(p.fingerprint))
         {
             p.CalculateFingerprint();
         }
-        if (r.fingerprint != p.fingerprint)
-        {
+        return GetRecordByIdentity(
+            p.patternMetadata.guid, p.fingerprint, ruleset);
+    }
+
+    // Resolves lightweight Song Select entries against whichever Records
+    // instance owns the active profile. This avoids retaining Guest Record
+    // objects created while tracks are indexed during startup.
+    public Record GetRecordByIdentity(string guid, string fingerprint,
+        Options.Ruleset ruleset)
+    {
+        if (string.IsNullOrEmpty(guid) || string.IsNullOrEmpty(fingerprint))
             return null;
-        }
-        return r;
+        Dictionary<string, Record> dict = recordDict[ruleset];
+        if (!dict.TryGetValue(guid, out Record record)) return null;
+        return record.fingerprint == fingerprint ? record : null;
+    }
+
+    public Record GetRecordByIdentity(string guid, string fingerprint)
+    {
+        return GetRecordByIdentity(guid, fingerprint, Options.instance.ruleset);
     }
 
     // Requires fingerprints to have been calculated.
@@ -244,14 +260,9 @@ public class Records : RecordsBase
 
     [MoonSharpHidden]
     public void UpdateRecord(Pattern p, Options.Ruleset ruleset,
-        int totalScore, PerformanceMedal medal)
+        int totalScore, int maxCombo, PerformanceMedal medal)
     {
         p.CheckFingerprintCalculated();
-
-        if (ruleset == Options.Ruleset.Custom)
-        {
-            return;
-        }
 
         string guid = p.patternMetadata.guid;
         Record record = GetRecord(p, ruleset);
@@ -274,6 +285,7 @@ public class Records : RecordsBase
                 fingerprint = p.fingerprint,
                 ruleset = Options.instance.ruleset,
                 score = totalScore,
+                maxCombo = maxCombo,
                 medal = medal,
                 gameVersion = Application.version
             };
@@ -286,6 +298,10 @@ public class Records : RecordsBase
             if (totalScore > record.score)
             {
                 record.score = totalScore;
+            }
+            if (maxCombo > record.maxCombo)
+            {
+                record.maxCombo = maxCombo;
             }
             if (medal > record.medal)
             {
@@ -339,10 +355,6 @@ public class Records : RecordsBase
         public SetlistRecord GetRecord(Setlist s,
             Options.Ruleset ruleset)
         {
-            if (ruleset == Options.Ruleset.Custom)
-            {
-                return null;
-            }
             Dictionary<string, SetlistRecord> dict =
                 parent.setlistRecordDict[ruleset];
             if (!dict.ContainsKey(s.setlistMetadata.guid))
@@ -420,11 +432,6 @@ public class Records : RecordsBase
             Options.Ruleset ruleset,
             int totalScore, PerformanceMedal medal)
         {
-            if (ruleset == Options.Ruleset.Custom)
-            {
-                return;
-            }
-
             // Calculate the guid and fingerprint of patterns.
             List<string> patternGuids = new List<string>();
             List<string> patternFingerprints = new List<string>();
@@ -508,16 +515,16 @@ public class Records : RecordsBase
     {
         recordDict[Options.Ruleset.Standard].Clear();
         recordDict[Options.Ruleset.Legacy].Clear();
+        recordDict[Options.Ruleset.Custom].Clear();
         foreach (Record r in records)
         {
-            if (r.ruleset == Options.Ruleset.Custom) continue;
             recordDict[r.ruleset].Add(r.guid, r);
         }
         setlistRecordDict[Options.Ruleset.Standard].Clear();
         setlistRecordDict[Options.Ruleset.Legacy].Clear();
+        setlistRecordDict[Options.Ruleset.Custom].Clear();
         foreach (SetlistRecord r in setlistRecords)
         {
-            if (r.ruleset == Options.Ruleset.Custom) continue;
             setlistRecordDict[r.ruleset].Add(r.setlistGuid, r);
         }
     }

@@ -20,6 +20,8 @@ public static class Paths
     public const string kThemeExtension = ".tmtheme";
 
     public const string kTrackFolderName = "Tracks";
+    public const string kProfilesFolderName = "Profiles";
+    public const string kGuestProfileName = "Guest";
     public const string kSetlistFolderName = "Setlists";
     public const string kSkinFolderName = "Skins";
     public const string kNoteSkinFolderName = "Note";
@@ -248,19 +250,147 @@ public static class Paths
         return Path.Combine(dataFolder, "options.json");
     }
 
+    public static string GetProfilesFolder()
+    {
+        return Path.Combine(dataFolder, kProfilesFolderName);
+    }
+
+    public static string GetGuestProfileFolder()
+    {
+        return Path.Combine(GetProfilesFolder(), kGuestProfileName);
+    }
+
+    // Pre-profile (legacy) locations of records and stats. Only used
+    // by MigrateLegacyDataToGuestProfile.
+    private static string GetLegacyRecordsFilePath()
+    {
+        return Path.Combine(dataFolder, "records.json");
+    }
+
+    private static string GetLegacyStatisticsFilePath()
+    {
+        return Path.Combine(dataFolder, "stats.json");
+    }
+
+    // One-time, crash-safe migration of pre-profile data into the
+    // Guest profile folder. Each file gates itself: the existence of
+    // the file at the Guest target is its own completion marker, so a
+    // crash between the two moves retries only the missing file on the
+    // next boot, and a deliberately wiped Guest folder never re-imports
+    // legacy data (the legacy file is gone after the move).
+    //
+    // MUST run after PrepareFolders and BEFORE Statistics
+    // .RefreshInstance / Records.RefreshInstance, otherwise a blank
+    // instance loaded from the now-empty legacy path will overwrite
+    // the migrated Guest data on the next periodic save.
+    public static void MigrateLegacyDataToGuestProfile()
+    {
+        string guestFolder = GetGuestProfileFolder();
+        Directory.CreateDirectory(guestFolder);
+
+        string guestRecords = Path.Combine(guestFolder, "records.json");
+        string legacyRecords = GetLegacyRecordsFilePath();
+        if (!File.Exists(guestRecords) && File.Exists(legacyRecords))
+        {
+            File.Move(legacyRecords, guestRecords);
+        }
+
+        string guestStats = Path.Combine(guestFolder, "stats.json");
+        string legacyStats = GetLegacyStatisticsFilePath();
+        if (!File.Exists(guestStats) && File.Exists(legacyStats))
+        {
+            File.Move(legacyStats, guestStats);
+        }
+    }
+
     public static string GetRulesetFilePath()
     {
         return Path.Combine(dataFolder, "ruleset.json");
     }
 
+    // When recordsFilePathOverride is set (by ExternalRecordsWatcher),
+    // records load AND save there instead of the default location. Both
+    // Records.RefreshInstance and RecordsBase.SaveToFile route through
+    // GetRecordsFilePath, so this single redirect covers read and write.
+    private static string recordsFilePathOverride;
+
     public static string GetRecordsFilePath()
     {
-        return Path.Combine(dataFolder, "records.json");
+        if (!string.IsNullOrEmpty(recordsFilePathOverride))
+        {
+            return recordsFilePathOverride;
+        }
+        // Default (no override) is the Guest profile, not the legacy
+        // dataFolder location; ExternalRecordsWatcher's unplug fallback
+        // therefore lands in the Guest profile automatically.
+        return Path.Combine(GetGuestProfileFolder(), "records.json");
     }
+
+    [MoonSharp.Interpreter.MoonSharpHidden]
+    public static void SetRecordsFilePathOverride(string path)
+    {
+        recordsFilePathOverride = path;
+    }
+
+    [MoonSharp.Interpreter.MoonSharpHidden]
+    public static void ClearRecordsFilePathOverride()
+    {
+        recordsFilePathOverride = null;
+    }
+
+    // When statsFilePathOverride is set (by ProfileManager at login),
+    // stats load AND save to the profile folder instead of Guest's.
+    private static string statsFilePathOverride;
 
     public static string GetStatisticsFilePath()
     {
-        return Path.Combine(dataFolder, "stats.json");
+        if (!string.IsNullOrEmpty(statsFilePathOverride))
+        {
+            return statsFilePathOverride;
+        }
+        return Path.Combine(GetGuestProfileFolder(), "stats.json");
+    }
+
+    [MoonSharp.Interpreter.MoonSharpHidden]
+    public static void SetStatsFilePathOverride(string path)
+    {
+        statsFilePathOverride = path;
+    }
+
+    [MoonSharp.Interpreter.MoonSharpHidden]
+    public static void ClearStatsFilePathOverride()
+    {
+        statsFilePathOverride = null;
+    }
+
+    // Returns the folder for any named profile (including Guest).
+    public static string GetProfileFolder(string profileName)
+    {
+        return Path.Combine(GetProfilesFolder(), profileName);
+    }
+
+    // profile.json for a named profile.
+    public static string GetProfileDataFilePath(string profileName)
+    {
+        return Path.Combine(GetProfileFolder(profileName), "profile.json");
+    }
+
+    // Player-side options.json inside a profile folder.
+    public static string GetProfileOptionsFilePath(string profileName)
+    {
+        return Path.Combine(GetProfileFolder(profileName), "options.json");
+    }
+
+    // records.json inside a profile folder.
+    public static string GetProfileRecordsFilePath(string profileName)
+    {
+        return Path.Combine(GetProfileFolder(profileName), "records.json");
+    }
+
+    // stats.json inside a profile folder.
+    public static string GetProfileStatsFilePath(string profileName)
+    {
+        return Path.Combine(GetProfileFolder(profileName), "stats.json");
     }
     #endregion
 

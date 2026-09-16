@@ -27,6 +27,7 @@ namespace ThemeApi
             gameSetup = new GameSetup();
             game = new GameState();
             editor = new EditorInterface();
+            profile = new ThemeProfileApi();
 
             CallbackRegistry.Prepare();
             UnityEventSynthesizer.Prepare();
@@ -60,6 +61,7 @@ namespace ThemeApi
         public Ruleset ruleset => Ruleset.instance;
         public Records records => Records.instance;
         public Statistics stats => Statistics.instance;
+        public ThemeProfileApi profile { get; private set; }
         public ThemeL10n l10n { get; private set; }
         public DynValue paths;  // Of type Paths
         public DynValue resources;  // Of type GlobalResource
@@ -71,6 +73,25 @@ namespace ThemeApi
         public CalibrationPreview calibrationPreview =>
             CalibrationPreview.instance;
         public AudioManager audio => AudioManager.instance;
+        #endregion
+
+        #region Records reload notification
+        // The active theme may register a callback here; the core's
+        // ExternalRecordsWatcher calls InvokeRecordsReloaded() after it
+        // swaps the records source (external drive <-> local) so the theme
+        // can re-render any on-screen scores. Reset per theme session.
+        private DynValue onRecordsReloaded;
+        public void SetOnRecordsReloaded(DynValue callback)
+        {
+            onRecordsReloaded = callback;
+        }
+        [MoonSharpHidden]
+        public void InvokeRecordsReloaded()
+        {
+            if (onRecordsReloaded == null) return;
+            if (onRecordsReloaded.Type != DataType.Function) return;
+            onRecordsReloaded.Function.Call();
+        }
         #endregion
 
         #region System dialogs

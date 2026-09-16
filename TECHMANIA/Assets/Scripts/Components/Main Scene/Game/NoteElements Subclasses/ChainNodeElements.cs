@@ -36,7 +36,7 @@ public class ChainNodeElements : ChainElementsBase
             scanDirection == GameLayout.ScanDirection.Left &&
             GlobalResource.noteSkin.chainNode.flipWhenScanningLeft);
 
-        pathToPreviousNote.style.height = layout.laneHeight *
+        pathToPreviousNote.style.height = layout.noteVisualLaneHeight *
             GlobalResource.noteSkin.chainPath.scale;
         pathToPreviousNote.EnableInClassList(hFlippedClass,
             scanDirection == GameLayout.ScanDirection.Left &&
@@ -57,11 +57,11 @@ public class ChainNodeElements : ChainElementsBase
 
     protected override void UpdateSprites(GameTimer timer)
     {
-        noteImage.style.backgroundImage = new StyleBackground(
+        noteImage.SetBackgroundSpriteIfChanged(
             GlobalResource.noteSkin.chainNode
             .GetSpriteAtFloatIndex(timer.beat));
-        pathToPreviousNote.style.backgroundImage = new
-            StyleBackground(GlobalResource.noteSkin.chainPath
+        pathToPreviousNote.SetBackgroundSpriteIfChanged(
+            GlobalResource.noteSkin.chainPath
             .GetSpriteAtFloatIndex(timer.beat));
     }
 

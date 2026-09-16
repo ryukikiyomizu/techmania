@@ -67,6 +67,26 @@ public class FmodChannelWrap
         }
     }
 
+    public void SetLoopPoints(float startSeconds, float endSeconds)
+    {
+        FMOD.Sound currentSound;
+        FmodManager.EnsureOk(channel.getCurrentSound(out currentSound));
+
+        uint soundLengthMs;
+        FmodManager.EnsureOk(currentSound.getLength(
+            out soundLengthMs, FMOD.TIMEUNIT.MS));
+
+        uint startMs = (uint)Math.Max(0f, startSeconds * 1000f);
+        uint endMs = endSeconds < 0f
+            ? Math.Max(startMs, soundLengthMs - 1)
+            : (uint)Math.Min(soundLengthMs - 1, endSeconds * 1000f);
+        // The channel is already playing when themes configure loop points.
+        // Apply them to that active playback instead of only changing the
+        // sound defaults used by future channels.
+        FmodManager.EnsureOk(channel.setLoopPoints(
+            startMs, FMOD.TIMEUNIT.MS, endMs, FMOD.TIMEUNIT.MS));
+    }
+
     // It's too much work to calculate pan from a mix matrix,
     // so we simply cache the value for getter.
     private float cachedPanStereo = 0f;
@@ -124,6 +144,29 @@ public class FmodChannelWrap
             FmodManager.EnsureOk(channel.setPosition(
                 (uint)value, FMOD.TIMEUNIT.PCM));
         }
+    }
+
+    // Returns the playback position in seconds, or false (without logging)
+    // if the channel is no longer valid or not playing -- e.g. a non-looping
+    // backing track that has finished. Used for per-frame audio-clock sync,
+    // where EnsureOk's invalid-handle warnings would otherwise spam.
+    [MoonSharpHidden]
+    public bool TryGetTimeSeconds(out float seconds)
+    {
+        seconds = 0f;
+        bool playing;
+        if (channel.isPlaying(out playing) != FMOD.RESULT.OK || !playing)
+        {
+            return false;
+        }
+        uint positionMs;
+        if (channel.getPosition(out positionMs, FMOD.TIMEUNIT.MS)
+            != FMOD.RESULT.OK)
+        {
+            return false;
+        }
+        seconds = positionMs * 0.001f;
+        return true;
     }
 
     public float volume

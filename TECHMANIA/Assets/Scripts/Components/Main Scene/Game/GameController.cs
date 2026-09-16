@@ -64,7 +64,14 @@ public class GameController : MonoBehaviour
 
     private ThemeApi.GameSetup setup;
     private ThemeApi.GameState state;
+    private Coroutine loadCoroutine;
+    private Action cancelPendingBga;
     public Modifiers modifiers => setup.modifiers;
+    // True when no song is being loaded or played. ExternalRecordsWatcher
+    // polls this so it only swaps the records source while the player is
+    // idle (every non-Idle state means a song is loading or in progress).
+    public bool IsIdle => state == null ||
+        state.state == ThemeApi.GameState.State.Idle;
     // Accessible from Lua via GameState.timer
     public GameTimer timer { get; private set; }
     private GameBackground bg;
@@ -74,6 +81,7 @@ public class GameController : MonoBehaviour
     private GameInputManager input;
     private InputFeedbackManager inputFeedback;
     private VfxAndComboText vfxAndComboText;
+    private StarGuideOverlay starGuideOverlay;
     // Accessible from Lua via GameState.setlist.scoreKeeper
     public SetlistScoreKeeper setlistScoreKeeper { get; private set; }
     // Accessible from Lua via GameState.scoreKeeper
@@ -101,8 +109,22 @@ public class GameController : MonoBehaviour
 
     private IEnumerator LoadSequence()
     {
+        LoadProbe probe = LoadProbe.Create();
+        bool bgaCancelled = false;
+        bool bgaLoaded = false;
+        Status bgaStatus = null;
+        ThemeApi.VideoElement preparedBga = null;
+        cancelPendingBga = () =>
+        {
+            bgaCancelled = true;
+            preparedBga?.Release();
+            preparedBga = null;
+        };
         Action<Status> reportLoadError = (Status status) =>
         {
+            cancelPendingBga?.Invoke();
+            cancelPendingBga = null;
+            probe?.Mark("error", status.errorMessage);
             state.SetLoadError();
             setup.onLoadError?.Function?.Call(status);
         };
@@ -141,6 +163,7 @@ public class GameController : MonoBehaviour
         // If playing a setlist, resolve pattern reference.
         string trackFolder = "";
         string patternGuid = "";
+        Track loadedTrack = null;
         if (setup.setlist.enabled)
         {
             Setlist.PatternReference r = null;
@@ -205,6 +228,7 @@ public class GameController : MonoBehaviour
             try
             {
                 track = Track.LoadFromFile(trackPath) as Track;
+                loadedTrack = track;
             }
             catch (Exception ex)
             {
@@ -235,9 +259,12 @@ public class GameController : MonoBehaviour
                 .ApplyModifiers(setup.modifiers);
         }
 
+        setup.ApplyDemoPlayableNoteWindow();
+
         // Calculate fingerprints in preparation for records.
         setup.patternBeforeModifier.CalculateFingerprint();
         setup.patternAfterModifier.CalculateFingerprint();
+        probe?.Mark("chart-and-modifiers", "track=" + trackFolder + "\tpattern=" + patternGuid);
 
         // Step 0: calculate the number of files to load.
         totalFiles =
@@ -256,6 +283,7 @@ public class GameController : MonoBehaviour
             }
         }
         totalFiles += keysoundFullPaths.Count;
+        probe?.Mark("keysound-list", "unique=" + keysoundFullPaths.Count);
 
         // Step 1: load background image to display on the loading
         // screen.
@@ -312,6 +340,33 @@ public class GameController : MonoBehaviour
             }
         }
         reportLoadProgress(backImage);
+        probe?.Mark("background-image", backImage);
+
+        // VideoPlayer.Prepare runs in the background. Start it now so its
+        // file open and decoder setup can overlap skin/audio/keysound loading.
+        string bga = setup.patternAfterModifier.patternMetadata.bga;
+        bool prepareBga = !string.IsNullOrEmpty(bga) &&
+            !setup.trackOptions.noVideo && !(probe?.skipBga ?? false);
+        Action startPreparingBga = () =>
+        {
+            string bgaPath = Paths.Combine(trackFolder, bga);
+            probe?.Event("bga-prepare-start", bga);
+            ThemeApi.VideoElement.CreateFromFile(bgaPath,
+                (Status status, ThemeApi.VideoElement element) =>
+                {
+                    bgaStatus = status;
+                    bgaLoaded = true;
+                    probe?.Event("bga-prepare-end", "ok=" + status.Ok());
+                    if (bgaCancelled)
+                    {
+                        element?.Release();
+                        return;
+                    }
+                    preparedBga = element;
+                });
+        };
+        if (prepareBga && !(probe?.sequentialBga ?? false))
+            startPreparingBga();
 
         // Step 2: load skins, if told to.
         if (Options.instance.reloadSkinsWhenLoadingPattern)
@@ -333,6 +388,7 @@ public class GameController : MonoBehaviour
             }
         }
         reportLoadProgress(Paths.kSkinFilename);
+        probe?.Mark("skins", "reload=" + Options.instance.reloadSkinsWhenLoadingPattern);
 
         // Step 3: load backing track.
         string backingTrackFilename = setup.patternAfterModifier
@@ -360,6 +416,7 @@ public class GameController : MonoBehaviour
             bg.SetBackingTrack(sound);
         }
         reportLoadProgress(backingTrackFilename);
+        probe?.Mark("backing-track", backingTrackFilename);
 
         // Step 4: load keysounds.
         bool keysoundsLoaded = false;
@@ -381,41 +438,31 @@ public class GameController : MonoBehaviour
             reportLoadError(keysoundStatus);
             yield break;
         }
+        probe?.Mark("keysounds", "unique=" + keysoundFullPaths.Count);
 
-        // Step 5: load BGA.
-        string bga = setup.patternAfterModifier.patternMetadata.bga;
-        if (!string.IsNullOrEmpty(bga) &&
-            !setup.trackOptions.noVideo)
+        // Step 5: wait for the BGA that was preparing during audio loading.
+        if (prepareBga)
         {
-            string path = Paths.Combine(trackFolder,
-                bga);
-            bool loaded = false;
-            Status status = null;
-            ThemeApi.VideoElement element = null;
-            ThemeApi.VideoElement.CreateFromFile(path,
-                (Status loadStatus,
-                ThemeApi.VideoElement loadedElement) =>
-                {
-                    loaded = true;
-                    status = loadStatus;
-                    element = loadedElement;
-                });
-            yield return new WaitUntil(() => loaded);
-            if (status.Ok())
+            if (probe?.sequentialBga ?? false)
+                startPreparingBga();
+            yield return new WaitUntil(() => bgaLoaded);
+            if (bgaStatus.Ok())
             {
-                bg.SetBga(element,
+                bg.SetBga(preparedBga,
                     loop: setup.patternAfterModifier.patternMetadata
                         .playBgaOnLoop,
                     offset: (float)setup.patternAfterModifier
                         .patternMetadata.bgaOffset);
+                preparedBga = null; // GameBackground owns it now.
             }
             else
             {
                 Debug.LogError("An error occurred when loading BGA: "
-                    + status.errorMessage + "; game will continue without BGA.");
+                    + bgaStatus.errorMessage + "; game will continue without BGA.");
             }
         }
         reportLoadProgress(bga);
+        probe?.Mark("bga-wait", "file=" + bga + "\tskipped=" + !prepareBga);
 
         // A few more synchronous loading steps.
 
@@ -468,8 +515,16 @@ public class GameController : MonoBehaviour
                 .patternMetadata.playableLanes);
 
         // Prepare for input.
+        HumanPlayRunContext humanPlayRunContext = new HumanPlayRunContext(
+            loadedTrack?.trackMetadata?.guid ?? "",
+            loadedTrack?.trackMetadata?.title ??
+                (EditorContext.inPreview ? "Editor Preview" : ""),
+            setup.patternBeforeModifier.patternMetadata.guid,
+            setup.patternBeforeModifier.patternMetadata.patternName,
+            setup.patternBeforeModifier.fingerprint,
+            setup.ruleset.ToString());
         input = new GameInputManager(setup.patternAfterModifier,
-            this, layout, noteManager, timer);
+            this, layout, noteManager, timer, humanPlayRunContext);
         input.Prepare();
 
         // Prepare for input feedback.
@@ -484,6 +539,9 @@ public class GameController : MonoBehaviour
         vfxAndComboText.ResetSize(layout.laneHeight, layout.scanHeight);
         vfxAndComboText.HideComboText();
 
+        starGuideOverlay = new StarGuideOverlay(
+            setup.guideContainer?.inner, noteManager, timer);
+
         // Initialize scores.
         scoreKeeper = new ScoreKeeper(setup, state);
         scoreKeeper.Prepare(setup.patternAfterModifier,
@@ -496,7 +554,10 @@ public class GameController : MonoBehaviour
         }
 
         // Load complete; wait on theme to begin game.
+        cancelPendingBga = null;
+        loadCoroutine = null;
         state.SetLoadComplete();
+        probe?.Mark("gameplay-setup-complete");
         setup.onLoadComplete?.Function?.Call();
     }
 
@@ -535,7 +596,7 @@ public class GameController : MonoBehaviour
         StatsMaintainer.instance?.OnGameBeginLoad();
 
         // Begin the load sequence.
-        StartCoroutine(LoadSequence());
+        loadCoroutine = StartCoroutine(LoadSequence());
     }
 
     public Status PrepareSetlist()
@@ -607,6 +668,13 @@ public class GameController : MonoBehaviour
 
     public void Conclude()
     {
+        if (loadCoroutine != null)
+        {
+            StopCoroutine(loadCoroutine);
+            loadCoroutine = null;
+        }
+        cancelPendingBga?.Invoke();
+        cancelPendingBga = null;
         StatsMaintainer.instance?.OnGameConclude();
 
         AudioManager.instance.SetSpeed(1f);
@@ -618,6 +686,8 @@ public class GameController : MonoBehaviour
         noteManager?.Dispose();
         input?.Dispose();
         vfxAndComboText?.Dispose();
+        starGuideOverlay?.HideAll();
+        starGuideOverlay = null;
 
         Resources.UnloadUnusedAssets();
         ScriptSession.session.DoString("collectgarbage()");
@@ -638,15 +708,15 @@ public class GameController : MonoBehaviour
 
     public bool ScoreIsValid()
     {
-        return !setup.modifiers.HasAnySpecialModifier() &&
-            setup.ruleset != Options.Ruleset.Custom &&
+        return HumanPlaytesterSettings.ScoreModifiersAreValid(
+                setup.modifiers, input != null && input.humanPlaytesterActive) &&
             !scoreKeeper.stageFailed;
     }
 
     public bool SetlistScoreIsValid()
     {
-        return !setup.modifiers.HasAnySpecialModifier() &&
-            setup.ruleset != Options.Ruleset.Custom &&
+        return HumanPlaytesterSettings.ScoreModifiersAreValid(
+                setup.modifiers, input != null && input.humanPlaytesterActive) &&
             !setlistScoreKeeper.stageFailed;
     }
 
@@ -681,6 +751,7 @@ public class GameController : MonoBehaviour
             setup.patternBeforeModifier,
             setup.ruleset,
             scoreKeeper.TotalScore(),
+            scoreKeeper.maxCombo,
             scoreKeeper.Medal());
     }
 
@@ -774,10 +845,17 @@ public class GameController : MonoBehaviour
         }
         else if (state.state == ThemeApi.GameState.State.Ongoing)
         {
-            timer.Update(comboTickCallback: ComboTick);
+            float? audioSyncTime = null;
+            if (bg.TryGetSyncTime(out float bgTime))
+            {
+                audioSyncTime = bgTime;
+            }
+            timer.Update(comboTickCallback: ComboTick,
+                audioTime: audioSyncTime);
             bg.Update(timer.baseTime, timer.prevFrameBaseTime);
             layout.Update(timer.scan);
             noteManager.Update(timer, scoreKeeper);
+            starGuideOverlay?.Update(setup.guideEnabled);
             input.Update();
             inputFeedback.Update(timer.scan);
             scoreKeeper.UpdateFever();
@@ -803,6 +881,7 @@ public class GameController : MonoBehaviour
         {
             scoreKeeper.stageFailed = true;
             state.SetComplete();
+            AwardDjExperienceForCurrentStage();
             if (setup.setlist.enabled)
             {
                 setup.setlist.onSetlistFailed?.Function?.Call(
@@ -837,11 +916,13 @@ public class GameController : MonoBehaviour
             {
                 scoreKeeper.stageFailed = true;
                 state.SetComplete();
+                AwardDjExperienceForCurrentStage();
                 setup.setlist.onHpBelowThreshold?.Function?.Call(
                     setlistScoreKeeper);
             }
             else
             {
+                AwardDjExperienceForCurrentStage();
                 if (currentStage == 3)
                 {
                     state.SetComplete();
@@ -868,7 +949,18 @@ public class GameController : MonoBehaviour
         else
         {
             state.SetComplete();
+            AwardDjExperienceForCurrentStage();
             setup.onStageClear?.Function?.Call(scoreKeeper);
+        }
+    }
+
+    private void AwardDjExperienceForCurrentStage()
+    {
+        int chartLevel = setup.patternAfterModifier?.patternMetadata?.level ?? 0;
+        int award = ProfileManager.AwardDjExperience(chartLevel, scoreKeeper.Rank());
+        if (award > 0)
+        {
+            Debug.Log($"[DJ Progression] +{award} EXP; total={ProfileManager.currentDjExp()}, level={ProfileManager.currentDjLevel()}");
         }
     }
     #endregion
@@ -936,6 +1028,7 @@ public class GameController : MonoBehaviour
             judgementAndTimeDifference.timeDifference);
         if (scoreKeeper.AllNotesResolved())
         {
+            input.LogHumanPlaytesterResult(scoreKeeper);
             setup.onAllNotesResolved?.Function?.Call(scoreKeeper);
         }
     }

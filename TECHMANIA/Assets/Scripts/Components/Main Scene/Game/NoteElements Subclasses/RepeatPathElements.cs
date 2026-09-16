@@ -123,7 +123,7 @@ public class RepeatPathElements
         // Path
         path.style.width = layout.gameContainerWidth *
             relativeWidth;
-        float pathHeight = layout.laneHeight *
+        float pathHeight = layout.noteVisualLaneHeight *
             GlobalResource.noteSkin.repeatPath.scale;
         path.style.height = pathHeight;
 
@@ -176,10 +176,10 @@ public class RepeatPathElements
     public void UpdateSprites(GameTimer timer)
     {
         float beat = timer.beat;
-        path.style.backgroundImage = new StyleBackground(
+        path.SetBackgroundSpriteIfChanged(
             GlobalResource.noteSkin.repeatPath
             .GetSpriteAtFloatIndex(beat));
-        pathEnd.style.backgroundImage = new StyleBackground(
+        pathEnd.SetBackgroundSpriteIfChanged(
             GlobalResource.noteSkin.repeatPathEnd
             .GetSpriteAtFloatIndex(beat));
     }

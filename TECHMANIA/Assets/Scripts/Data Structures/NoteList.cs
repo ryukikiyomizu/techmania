@@ -122,4 +122,12 @@ public class NoteList
     {
         list.Where((e, i) => !active[i]).ToList().ForEach(action);
     }
+
+    public void ForEachActive(Action<INoteHolder> action)
+    {
+        for (int i = first; i < list.Count; i++)
+        {
+            if (active[i]) action(list[i]);
+        }
+    }
 }

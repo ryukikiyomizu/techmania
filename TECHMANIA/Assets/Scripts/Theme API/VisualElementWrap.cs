@@ -376,6 +376,7 @@ namespace ThemeApi
                 EventType.PointerLeave => typeof(PointerLeaveEvent),
                 EventType.PointerOver => typeof(PointerOverEvent),
                 EventType.PointerOut => typeof(PointerOutEvent),
+                EventType.PointerCancel => typeof(PointerCancelEvent),
                 EventType.Click => typeof(ClickEvent),
                 EventType.FrameUpdate => typeof(FrameUpdateEvent),
                 EventType.ApplicationFocus =>

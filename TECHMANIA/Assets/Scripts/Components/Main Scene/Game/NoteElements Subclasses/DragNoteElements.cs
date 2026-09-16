@@ -88,13 +88,13 @@ public class DragNoteElements : NoteElements
 
         gameContainerWidthCopy = layout.gameContainerWidth;
         scanHeightCopy = layout.scanHeight;
-        curveWidth = layout.laneHeight *
+        curveWidth = layout.noteVisualLaneHeight *
             GlobalResource.noteSkin.dragCurve.scale;
     }
 
     protected override void UpdateSprites(GameTimer timer)
     {
-        noteImage.style.backgroundImage = new StyleBackground(
+        noteImage.SetBackgroundSpriteIfChanged(
             GlobalResource.noteSkin.dragHead
             .GetSpriteAtFloatIndex(timer.beat));
         curveSprite = GlobalResource.noteSkin.dragCurve

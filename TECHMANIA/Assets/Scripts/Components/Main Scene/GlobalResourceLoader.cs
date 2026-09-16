@@ -5,6 +5,9 @@ using System.ComponentModel;
 using System.IO;
 using UnityEngine;
 using UnityEngine.Events;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 // GlobalResource is not a MonoBehaviour but this has to be, due to
 // coroutines.
@@ -566,7 +569,8 @@ public class GlobalResourceLoader : MonoBehaviour
 
             // Process folders upward from processingAbsoluteFolder.
             while (processingAbsoluteFolder != Paths
-                .GetTrackRootFolder(streamingAssets: true))
+                .GetTrackRootFolder(streamingAssets: true)
+                && !string.IsNullOrEmpty(processingRelativeFolder))
             {
                 string processingRelativeParentFolder = Path
                     .GetDirectoryName(processingRelativeFolder);
@@ -982,7 +986,8 @@ public class GlobalResourceLoader : MonoBehaviour
 
             // Process folders upward from processingAbsoluteFolder.
             while (processingAbsoluteFolder != Paths
-                .GetSetlistRootFolder(streamingAssets: true))
+                .GetSetlistRootFolder(streamingAssets: true)
+                && !string.IsNullOrEmpty(processingRelativeFolder))
             {
                 string processingRelativeParentFolder = Path
                     .GetDirectoryName(processingRelativeFolder);
@@ -1042,11 +1047,29 @@ public class GlobalResourceLoader : MonoBehaviour
     }
     #endregion
 
-    #region Theme
+#region Theme
+#if UNITY_EDITOR
+    private bool ShouldLoadLiveEditorTheme()
+    {
+        return Application.isEditor &&
+            (Options.instance.theme == Options.kDefaultTheme ||
+            Options.instance.theme == "Technika 2");
+    }
+#endif
+
     public void LoadTheme(
         ProgressCallback progressCallback,
         CompleteCallback completeCallback)
     {
+#if UNITY_EDITOR
+        if (ShouldLoadLiveEditorTheme())
+        {
+            StartCoroutine(LoadThemeFromProjectAssetsCoroutine(
+                progressCallback, completeCallback));
+            return;
+        }
+#endif
+
         string themePath;
         if (Application.isEditor &&
             Options.instance.theme == Options.kDefaultTheme)
@@ -1074,6 +1097,65 @@ public class GlobalResourceLoader : MonoBehaviour
         }
     }
 
+#if UNITY_EDITOR
+    private IEnumerator LoadThemeFromProjectAssetsCoroutine(
+        ProgressCallback progressCallback,
+        CompleteCallback completeCallback)
+    {
+        Options.TemporarilyDisableVSync();
+        GlobalResource.themeContent =
+            new Dictionary<string, object>();
+
+        string[] searchFolders = { "Assets/UI" };
+        string[] guids = AssetDatabase.FindAssets("", searchFolders);
+        int loadedCount = 0;
+
+        foreach (string guid in guids)
+        {
+            string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+            if (Directory.Exists(assetPath))
+            {
+                continue;
+            }
+
+            progressCallback?.Invoke(assetPath);
+            UnityEngine.Object asset =
+                AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+            if (asset == null)
+            {
+                asset = AssetDatabase.LoadMainAssetAtPath(assetPath);
+            }
+            if (asset == null)
+            {
+                continue;
+            }
+
+            string key = assetPath.Replace('\\', '/').ToLowerInvariant();
+
+            if (asset is AudioClip)
+            {
+                FmodSoundWrap sound = FmodManager
+                    .CreateSoundFromAudioClip(asset as AudioClip);
+                GlobalResource.themeContent[key] = sound;
+            }
+            else
+            {
+                GlobalResource.themeContent[key] = asset;
+            }
+
+            loadedCount++;
+            if (loadedCount % 64 == 0)
+            {
+                yield return null;
+            }
+        }
+
+        Debug.Log($"[Theme] Loaded {GlobalResource.themeContent.Count} live editor assets from Assets/UI");
+        Options.RestoreVSync();
+        completeCallback?.Invoke(Status.OKStatus());
+    }
+#endif
+
     private IEnumerator LoadThemeCoroutine(
         string path,
         ProgressCallback progressCallback,
@@ -1083,6 +1165,7 @@ public class GlobalResourceLoader : MonoBehaviour
         GlobalResource.themeContent =
             new Dictionary<string, object>();
         progressCallback?.Invoke(path);
+        Debug.Log($"[Theme] Loading theme bundle: {path}");
         AssetBundleCreateRequest bundleRequest = 
             AssetBundle.LoadFromFileAsync(path);
         yield return bundleRequest;
@@ -1128,6 +1211,7 @@ public class GlobalResourceLoader : MonoBehaviour
                 GlobalResource.themeContent.Add(name, request.asset);
             }
         }
+        Debug.Log($"[Theme] Loaded {GlobalResource.themeContent.Count} assets from {path}");
         Options.RestoreVSync();
         completeCallback?.Invoke(Status.OKStatus());
     }

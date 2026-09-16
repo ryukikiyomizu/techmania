@@ -78,9 +78,14 @@ public class NoteManager
                 List<RepeatNoteElementsBase>());
         }
 
-        // Spawn note elements in reverse order, so earlier notes
-        // are drawn on top. However, the xyzInLane lists should still
-        // be in the original order.
+        // Spawn note elements in reverse order, so earlier notes are drawn
+        // on top. This is especially important for Pop Mixing: simultaneous
+        // notes are intentionally allowed to overlap instead of being
+        // visually flattened by a later note. The xyzInLane lists should
+        // still be in the original order for input and judgement traversal.
+        bool preservePopOverlap = playableLanes == 4;
+        if (preservePopOverlap)
+            Debug.Log("[T2 Notes] Preserving Pop overlapped-note draw order.");
         foreach (Note n in p.notes.Reverse())
         {
             float floatScan = (float)n.pulse / Pattern.pulsesPerBeat
@@ -145,10 +150,12 @@ public class NoteManager
                 if (n.type == NoteType.ChainHead ||
                     n.type == NoteType.ChainNode)
                 {
-                    (noteElements as ChainElementsBase)
-                        .SetNextChainNode(lastCreatedChainNode);
+                    ChainElementsBase chainElements =
+                        noteElements as ChainElementsBase;
+                    chainElements.SetNextChainNode(lastCreatedChainNode);
                     if (n.type == NoteType.ChainHead)
                     {
+                        chainElements.AssignGuideChainHeadToLinkedNodes();
                         lastCreatedChainNode = null;
                     }
                     else  // ChainNode

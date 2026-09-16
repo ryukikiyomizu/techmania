@@ -54,6 +54,29 @@ public class GameLayout
         Ruleset.instance.scanMarginMiddle[
             pattern.patternMetadata.playableLanes - 2]) /
         pattern.patternMetadata.playableLanes;
+    public float noteVisualLaneHeight => laneHeight *
+        GetNoteScaleCompensation(pattern.patternMetadata.playableLanes,
+            Options.instance == null ? Options.NoteSize.Big :
+            Options.instance.noteSize);
+
+    public static float GetNoteScaleCompensation(int playableLanes)
+    {
+        return GetNoteScaleCompensation(playableLanes, Options.NoteSize.Big);
+    }
+
+    public static float GetNoteScaleCompensation(int playableLanes,
+        Options.NoteSize noteSize)
+    {
+        switch (noteSize)
+        {
+            case Options.NoteSize.Normal:
+                return 1f;
+            case Options.NoteSize.Small:
+                return playableLanes == 4 ? 0.92f : 0.86f;
+            default:
+                return playableLanes == 4 ? 1.15f : 1f;
+        }
+    }
 
     public float gameContainerWidth => 
         layoutContainer.resolvedStyle.width;
@@ -370,7 +393,7 @@ public class GameLayout
             float relativeScan = scan - s.scanNumber;
             PlaceElementHorizontally(s.anchor, relativeScan,
                 s.direction);
-            s.scanline.style.backgroundImage = new StyleBackground(
+            s.scanline.SetBackgroundSpriteIfChanged(
                 scanlineSprite);
             s.scanline.style.opacity = scanlineAlpha;
         }
@@ -409,13 +432,11 @@ public class GameLayout
                 else
                 {
                     elements.countdownBg.visible = true;
-                    elements.countdownBg.style.backgroundImage =
-                        new StyleBackground(
+                    elements.countdownBg.SetBackgroundSpriteIfChanged(
                             skin.scanCountdownBackground
                             .GetSpriteAtFloatIndex(progress));
                     elements.countdownNum.visible = true;
-                    elements.countdownNum.style.backgroundImage =
-                        new StyleBackground(
+                    elements.countdownNum.SetBackgroundSpriteIfChanged(
                             skin.scanCountdownNumbers
                             .GetSpriteAtFloatIndex(progress));
                 }

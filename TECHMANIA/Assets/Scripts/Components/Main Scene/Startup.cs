@@ -33,7 +33,16 @@ public class Startup : MonoBehaviour
     void Start()
     {
         Input.simulateMouseWithTouches = false;
+        // Enable EnhancedTouch so GameInputManager can read per-touch event
+        // timestamps for sub-frame tap timing under the Input System.
+        UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Enable();
         Paths.PrepareFolders();
+        // Move legacy records/stats into the Guest profile before any
+        // Refresh*Instance call. Ordering is load-bearing: refreshing
+        // first would load a blank instance from the empty legacy path
+        // and overwrite the migrated Guest data on the first periodic
+        // save (StatsMaintainer saves every 30 seconds).
+        Paths.MigrateLegacyDataToGuestProfile();
         Options.RefreshInstance();
         Statistics.RefreshInstance();
         Statistics.instance.timesAppLaunched++;
@@ -53,7 +62,19 @@ public class Startup : MonoBehaviour
         L10n.SetLocale(Options.instance.locale, L10n.Instance.System);
 
         SpriteSheet.PrepareEmptySpriteSheet();
+        // Redirect records to the external drive before the first load, if
+        // the feature is enabled and the drive is available; the watcher then
+        // keeps the source in sync (checked every 8s while idle) for the whole
+        // session, including under other themes.
+        ExternalRecordsWatcher watcher = gameObject
+            .AddComponent<ExternalRecordsWatcher>();
+        watcher.ApplyInitialSource();
         Records.RefreshInstance();
+
+        // ProfileManager initialises after everything is loaded.
+        // It scans for a USB token if present and stores the pending cardId
+        // for the theme to pick up via tm.profile.hasPendingToken().
+        ProfileManager.Initialize();
 
         DiscordController.Start();
 
@@ -90,5 +111,10 @@ public class Startup : MonoBehaviour
         Paths.ApplyCustomDataLocation();
         BetterStreamingAssets.Initialize();
         bootScreen.StartBooting();
+    }
+
+    private void OnApplicationQuit()
+    {
+        ProfileManager.Shutdown();
     }
 }

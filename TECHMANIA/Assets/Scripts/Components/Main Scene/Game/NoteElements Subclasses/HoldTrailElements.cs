@@ -124,7 +124,7 @@ public class HoldTrailElements
         totalTrail.style.width = layout.gameContainerWidth *
             relativeWidth;
 
-        float laneHeight = layout.laneHeight;
+        float laneHeight = layout.noteVisualLaneHeight;
         float scale = (note.type == NoteType.Hold) ?
             GlobalResource.noteSkin.holdTrail.scale :
             GlobalResource.noteSkin.repeatHoldTrail.scale;
@@ -195,12 +195,12 @@ public class HoldTrailElements
 
         if (ongoingTrailSprite != null)
         {
-            ongoingTrail.style.backgroundImage = new StyleBackground(
+            ongoingTrail.SetBackgroundSpriteIfChanged(
                 ongoingTrailSprite);
         }
-        durationTrail.style.backgroundImage = new StyleBackground(
+        durationTrail.SetBackgroundSpriteIfChanged(
             durationTrailSprite);
-        durationTrailEnd.style.backgroundImage = new StyleBackground(
+        durationTrailEnd.SetBackgroundSpriteIfChanged(
             durationTrailEndSprite);
     }
 }

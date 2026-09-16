@@ -16,7 +16,8 @@ using UnityEngine.Events;
 [FormatVersion(Options.kVersion, typeof(Options), isLatest: true)]
 public class OptionsBase : SerializableClass<OptionsBase>
 {
-    public void SaveToFile()
+    // Virtual so Options can override with profile-aware split save.
+    public virtual void SaveToFile()
     {
         SaveToFile(Paths.GetOptionsFilePath());
     }
@@ -42,6 +43,8 @@ public class Options : OptionsBase
 {
     public const string kVersion = "3";
 
+    // ── Machine (hardware / install-specific) ────────────────────────────────
+
     // Graphics
 
     public int width; 
@@ -51,15 +54,40 @@ public class Options : OptionsBase
     public FullScreenMode fullScreenMode;
     public bool vSync;
 
-    // Audio
+    // Audio hardware
+
+    public int audioBufferSize;
+    public int numAudioBuffers;
+    public bool useAsio;
+
+    // Custom data paths
+    // Remember to call Paths.ApplyCustomDataLocation after modifying
+    // these paths.
+
+    public bool customDataLocation;
+    public string tracksFolderLocation;
+    public string setlistsFolderLocation;
+    public string skinsFolderLocation;
+    public string themesFolderLocation;
+
+    // External records
+    // When on, and the drive containing externalRecordsPath is available
+    // and the player is not mid-song, scores load from / save to
+    // externalRecordsPath (a portable records.json) instead of the default
+    // location. Driven by ExternalRecordsWatcher; the on/off toggle lives
+    // in the default theme but the behavior applies under any theme.
+
+    public bool checkExternalDriveForScores;
+    public string externalRecordsPath;
+
+    // ── Player (preferences that travel with the player) ─────────────────────
+
+    // Audio volumes
 
     public int masterVolumePercent;
     public int musicVolumePercent;
     public int keysoundVolumePercent;
     public int sfxVolumePercent;
-    public int audioBufferSize;
-    public int numAudioBuffers;
-    public bool useAsio;
 
     // Appearance
 
@@ -73,6 +101,14 @@ public class Options : OptionsBase
     public string theme;
     public const string kDefaultTheme = "Default";
 
+    public enum NoteSize
+    {
+        Big,
+        Normal,
+        Small
+    }
+    public NoteSize noteSize;
+
     // Timing
 
     public int touchOffsetMs;
@@ -80,7 +116,7 @@ public class Options : OptionsBase
     public int keyboardMouseOffsetMs;
     public int keyboardMouseLatencyMs;
 
-    // Miscellaneous
+    // Gameplay
 
     public enum Ruleset
     {
@@ -89,13 +125,6 @@ public class Options : OptionsBase
         Custom
     }
     public Ruleset ruleset;
-    // Remember to call Paths.ApplyCustomDataLocation after modifying
-    // these paths.
-    public bool customDataLocation;
-    public string tracksFolderLocation;
-    public string setlistsFolderLocation;
-    public string skinsFolderLocation;
-    public string themesFolderLocation;
     // Call TurnOn/OffDiscordRichPresence instead of setting this
     // directly.
     public bool discordRichPresence
@@ -177,8 +206,8 @@ public class Options : OptionsBase
         musicVolumePercent = 80;
         keysoundVolumePercent = 100;
         sfxVolumePercent = 100;
-        audioBufferSize = 1024;
-        numAudioBuffers = 4;
+        audioBufferSize = 512;
+        numAudioBuffers = 2;
         useAsio = false;
 
         locale = L10n.kDefaultLocale;
@@ -188,6 +217,7 @@ public class Options : OptionsBase
         gameUiSkin = "Default";
         reloadSkinsWhenLoadingPattern = false;
         theme = kDefaultTheme;
+        noteSize = NoteSize.Big;
 
         touchOffsetMs = 0;
         touchLatencyMs = 0;
@@ -199,6 +229,8 @@ public class Options : OptionsBase
         tracksFolderLocation = "";
         skinsFolderLocation = "";
         themesFolderLocation = "";
+        checkExternalDriveForScores = false;
+        externalRecordsPath = "D:\\records.json";
         discordRichPresence = true;
 
         editorOptions = new EditorOptions();
@@ -357,13 +389,29 @@ public class Options : OptionsBase
 
     public static int GetDefaultAudioBufferSize()
     {
-        Debug.LogWarning("GetDefaultAudioBufferSize() is deprecated, and hardcoded to 1024.");
-        return 1024;
+        return 512;
     }
 
+    // FMOD cannot resize its DSP buffer without recreating the system
+    // (which invalidates all loaded sounds), so a buffer-size change takes
+    // effect on the next launch. This validates and persists the choice;
+    // FmodManager.Initialize reads audioBufferSize/numAudioBuffers at startup.
     public void ApplyAudioBufferSize()
     {
-        Debug.LogWarning("TECHMANIA no longer allows setting audio buffer size at runtime.");
+        audioBufferSize = Mathf.Clamp(audioBufferSize, 16, 2048);
+        numAudioBuffers = Mathf.Clamp(numAudioBuffers, 2, 8);
+        Debug.Log($"Audio buffer set to {audioBufferSize} samples x {numAudioBuffers}; applies on next launch.");
+    }
+
+    // One-tap low-latency profile, best paired with ASIO on Windows.
+    // May cause audio crackle/underruns on weaker hardware (raise the
+    // buffer if so). Applied on next launch.
+    public void ApplyLowLatencyAudioPreset()
+    {
+        useAsio = true;
+        audioBufferSize = 256;
+        numAudioBuffers = 2;
+        ApplyAudioBufferSize();
     }
 
     public void ApplyAsio()
@@ -393,6 +441,34 @@ public class Options : OptionsBase
     {
         discordRichPresence = false;
         DiscordController.Dispose();
+    }
+    #endregion
+
+    #region Profile-aware save
+    // Guest owns the complete machine options file. During a member session,
+    // save machine fields using the pre-login player snapshot and write the
+    // live player fields only to the active profile.
+    public override void SaveToFile()
+    {
+        PlayerOptions machinePlayer =
+            ProfileManager.GetMachinePlayerOptionsSnapshot();
+        if (ProfileManager.state == ProfileManager.SessionState.LoggedIn &&
+            machinePlayer != null)
+        {
+            Options machineCopy = Clone() as Options;
+            machinePlayer.ApplyTo(machineCopy, false);
+            machineCopy.SaveMachineFileOnly();
+            ProfileManager.OnOptionsSaved(this);
+            return;
+        }
+
+        base.SaveToFile();
+        ProfileManager.OnOptionsSaved(this);
+    }
+
+    private void SaveMachineFileOnly()
+    {
+        base.SaveToFile();
     }
     #endregion
 
@@ -671,7 +747,9 @@ public class Modifiers
 
     public bool HasAnySpecialModifier()
     {
-        if (mode != Mode.Normal) return true;
+        // No Fail is allowed to save scores; only AutoPlay and Practice
+        // invalidate them.
+        if (mode == Mode.AutoPlay || mode == Mode.Practice) return true;
         if (controlOverride != ControlOverride.None) return true;
         if (scrollSpeed != ScrollSpeed.Normal) return true;
         return false;

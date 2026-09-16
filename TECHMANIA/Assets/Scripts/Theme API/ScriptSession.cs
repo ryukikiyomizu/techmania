@@ -23,6 +23,11 @@ namespace ThemeApi
             // and .Net classes exposed to Lua.
             // ==================== IMPORTANT =======================
 
+            // Clean up previous theme session's profile event handler
+            // before creating a new Lua session, so stale Lua closures
+            // don't remain hooked to ProfileManager.profileChanged.
+            Techmania.instance?.profile?.ClearOnProfileChanged();
+
             // Set up sandbox
             session = new Script(CoreModules.Preset_SoftSandbox);
             
@@ -123,10 +128,12 @@ namespace ThemeApi
             Table tmEnums = new Table(session);
             addType(tmEnums, typeof(VisualElementWrap.EventType));
             addType(tmEnums, typeof(Options.Ruleset));
+            addTypeAs(tmEnums, typeof(Options.NoteSize), "noteSize");
             addTypeAs(tmEnums, typeof(GameState.State), "gameState");
             addType(tmEnums, typeof(SkinType));
             addType(tmEnums, typeof(Techmania.Platform));
             addTypeAs(tmEnums, typeof(Status.Code), "statusCode");
+            addTypeAs(tmEnums, typeof(ProfileManager.SessionState), "sessionState");
             // Enums used by Track
             addType(tmEnums, typeof(ControlScheme));
             addType(tmEnums, typeof(NoteType));

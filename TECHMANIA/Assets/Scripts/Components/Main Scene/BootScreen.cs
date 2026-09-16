@@ -2,6 +2,7 @@ using MoonSharp.VsCodeDebugger;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Sockets;
 using ThemeApi;
 using TMPro;
@@ -223,7 +224,12 @@ public class BootScreen : MonoBehaviour
         yield return LoadTheme();
 
         // Load main tree and main script.
-        string mainTreePath = "assets/ui/maintree.uxml";
+        // Support both legacy "assets/ui/" path and newer per-theme paths.
+        string mainTreePath = GlobalResource.themeContent.ContainsKey("assets/ui/maintree.uxml")
+            ? "assets/ui/maintree.uxml"
+            : GlobalResource.themeContent.Keys
+                .FirstOrDefault(k => k.EndsWith("/maintree.uxml") || k == "maintree.uxml")
+              ?? "assets/ui/maintree.uxml";
         VisualTreeAsset mainTree = GlobalResource.GetThemeContent
             <VisualTreeAsset>(mainTreePath);
         if (mainTree == null)
@@ -231,7 +237,11 @@ public class BootScreen : MonoBehaviour
             messageDialog.Show($"{L10n.GetString("theme_error_critical_file_missing")}\n\n{mainTreePath}\n\n{L10n.GetString("theme_error_instruction")}", () => QuitGame());
             yield break;
         }
-        string mainScriptPath = "assets/ui/mainscript.txt";
+        string mainScriptPath = GlobalResource.themeContent.ContainsKey("assets/ui/mainscript.txt")
+            ? "assets/ui/mainscript.txt"
+            : GlobalResource.themeContent.Keys
+                .FirstOrDefault(k => k.EndsWith("/mainscript.txt") || k == "mainscript.txt")
+              ?? "assets/ui/mainscript.txt";
         TextAsset mainScript = GlobalResource.GetThemeContent
             <TextAsset>(mainScriptPath);
         if (mainScript == null)

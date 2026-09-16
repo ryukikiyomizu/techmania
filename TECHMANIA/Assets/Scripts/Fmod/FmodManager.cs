@@ -71,7 +71,17 @@ public class FmodManager
             FMOD.System newCoreSystem;
             EnsureOk(FMOD.Factory.System_Create(out newCoreSystem));
             system = newCoreSystem;
-            EnsureOk(system.setDSPBufferSize((uint)bufferSize, numBuffers));
+            // Don't EnsureOk here: very small buffers (16/32/64) may be
+            // rejected by the device. Fall back to FMOD's default instead
+            // of failing startup.
+            FMOD.RESULT bufferResult = system.setDSPBufferSize(
+                (uint)bufferSize, numBuffers);
+            if (bufferResult != FMOD.RESULT.OK)
+            {
+                Debug.LogWarning($"setDSPBufferSize({bufferSize}, " +
+                    $"{numBuffers}) failed: {bufferResult}; using the FMOD " +
+                    $"default buffer. Try a larger audio buffer size.");
+            }
 
             // The default virtual channel count is 128, according
             // to FMODUnity.Platform.PropertyAccessors
@@ -79,6 +89,27 @@ public class FmodManager
             // Likewise, the default real channel count is 32,
             // but we increase it to 64.
             EnsureOk(system.setSoftwareChannels(64));
+
+            // Match the mixer rate to the output device to avoid an extra
+            // resampling stage (a small latency + CPU saving). Defensive:
+            // on any error, skip and let FMOD pick its default mixer rate.
+            System.Guid driverGuid;
+            int deviceRate;
+            FMOD.SPEAKERMODE deviceSpeakerMode;
+            int deviceSpeakerChannels;
+            if (system.getDriverInfo(0, out driverGuid, out deviceRate,
+                    out deviceSpeakerMode, out deviceSpeakerChannels)
+                    == FMOD.RESULT.OK &&
+                deviceRate >= 22050 && deviceRate <= 192000)
+            {
+                FMOD.RESULT formatResult = system.setSoftwareFormat(
+                    deviceRate, FMOD.SPEAKERMODE.DEFAULT, 0);
+                if (formatResult != FMOD.RESULT.OK)
+                {
+                    Debug.LogWarning("setSoftwareFormat failed: " +
+                        formatResult + "; using FMOD default mixer rate.");
+                }
+            }
             EnsureOk(system.init(128, FMOD.INITFLAGS.NORMAL, 
                 IntPtr.Zero));
         }
@@ -239,6 +270,31 @@ public class FmodManager
         // Return sound.
         EnsureOk(sound.setMode(FMOD.MODE.LOOP_OFF | FMOD.MODE._2D));
         return new FmodSoundWrap(sound);
+    }
+
+    // Loads a sound by decoding the file natively in FMOD, avoiding the
+    // UnityWebRequest -> AudioClip -> PCM marshal-copy round trip used by
+    // CreateSoundFromAudioClip. Only valid for real on-disk files: callers
+    // must gate on File.Exists, because in-APK StreamingAssets on Android
+    // are not real files and need the UnityWebRequest path. CREATESAMPLE
+    // fully decodes into memory (matching the old behaviour), which is best
+    // for keysounds played repeatedly with low latency.
+    public static void CreateSoundFromFile(string path,
+        out FmodSoundWrap sound, out Status status)
+    {
+        sound = null;
+        FMOD.MODE mode = FMOD.MODE.CREATESAMPLE | FMOD.MODE._2D |
+            FMOD.MODE.LOOP_OFF | FMOD.MODE.IGNORETAGS;
+        FMOD.Sound fmodSound;
+        FMOD.RESULT result = system.createSound(path, mode, out fmodSound);
+        if (result != FMOD.RESULT.OK)
+        {
+            status = Status.Error(Status.Code.OtherError,
+                result.ToString(), path);
+            return;
+        }
+        sound = new FmodSoundWrap(fmodSound);
+        status = Status.OKStatus();
     }
     #endregion
 
