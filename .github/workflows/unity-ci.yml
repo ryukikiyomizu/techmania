@@ -52,67 +52,61 @@ jobs:
           FMOD_REPO: ${{ vars.FMOD_RESTORE_REPO }}
           FMOD_TOKEN: ${{ secrets.FMOD_RESTORE_TOKEN }}
         run: |
+          # Name each item separately: "FMOD missing" sent people hunting through four
+          # settings pages when only one of them was wrong.
           rows=()
+          missing=0
+          chk() {
+            if [ -n "$2" ]; then
+              rows+=("| \`$1\` | $3 | present |")
+            else
+              rows+=("| \`$1\` | $3 | **MISSING** |")
+              missing=1
+            fi
+          }
+          chk FMOD_RESTORE_REPO   "$FMOD_REPO"     "variable"
+          chk FMOD_RESTORE_TOKEN  "$FMOD_TOKEN"    "secret"
+          chk UNITY_USERNAME      "$UNITY_USERNAME" "secret"
+          chk UNITY_PASSWORD      "$UNITY_PASSWORD" "secret"
+
           if [ -d "$PROJECT_PATH/Assets/Plugins/FMOD" ]; then
-            rows+=("| FMOD for Unity | committed in the repo |")
+            rows+=("| FMOD for Unity | in the tree | already committed |")
           elif [ -n "$FMOD_REPO" ] && [ -n "$FMOD_TOKEN" ]; then
-            rows+=("| FMOD for Unity | restored from \`$FMOD_REPO\` |")
+            rows+=("| FMOD for Unity | restore source | \`$FMOD_REPO\` |")
           else
-            rows+=("| FMOD for Unity | **MISSING** |")
-            missing_fmod=1
+            rows+=("| FMOD for Unity | **unavailable** | see note below |")
           fi
-          if [ -n "$UNITY_USERNAME" ] && [ -n "$UNITY_PASSWORD" ]; then
-            rows+=("| \`UNITY_USERNAME\` + \`UNITY_PASSWORD\` | present |")
-          else
-            rows+=("| \`UNITY_USERNAME\` + \`UNITY_PASSWORD\` | **MISSING** |")
-            missing_license=1
-          fi
-          rows+=("| Runner | \`windows-latest\` (matches the project's Windows-only native plugins) |")
 
           {
             echo "### Unity CI prerequisites"
             echo
-            echo '| item | status |'
-            echo '|---|---|'
+            echo "| item | where it lives | status |"
+            echo '|---|---|---|'
             printf '%s\n' "${rows[@]}"
+            echo
+            echo "CI reads these from \`${{ github.repository }}\` only - a variable set on"
+            echo "the deps repo, or filed as an *environment* variable instead of a"
+            echo "repository one, is invisible to this run."
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "${missing_fmod:-0}" = 1 ]; then
+          if [ ! -d "$PROJECT_PATH/Assets/Plugins/FMOD" ] && \
+             { [ -z "$FMOD_REPO" ] || [ -z "$FMOD_TOKEN" ]; }; then
             cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          FMOD for Unity cannot be restored, so `Assets/Scripts/Fmod/*.cs` has no `FMOD.*`
+          types to compile against and a compile check would be meaningless. Two ways out:
 
-          `TECHMANIA/.gitignore` excludes the FMOD integration on purpose:
-
-              # FMOD - developers should acquire their own license, then download
-              # "FMOD for Unity" ... then import into project.
-              /[Aa]ssets/Plugins/FMOD/
-
-          `FmodManager.cs`, `FmodChannelWrap.cs` and `FmodSoundWrap.cs` therefore have
-          no `FMOD.*` types to compile against. Pack the imported folder and host it on a
-          **private** repo (FMOD's license is why it cannot live here), then set
-          `FMOD_RESTORE_REPO` (the repo) and `FMOD_RESTORE_TOKEN` (a read-only token for
-          it). Full steps:
-          `.github/UNITY-CI-SETUP.md`.
+          1. Set both `FMOD_RESTORE_REPO` (variable) and `FMOD_RESTORE_TOKEN` (secret) on
+             **this** repo - `Settings -> Secrets and variables -> Actions`, and note the
+             two tabs. Runbook: `.github/UNITY-CI-SETUP.md` section 3.
+          2. Nothing else is required for licensing at this point; `UNITY_USERNAME` and
+             `UNITY_PASSWORD` above are the whole of it.
           EOF
-            echo "::error::FMOD for Unity is neither committed nor restorable - no compile check can pass."
+            echo "::error::FMOD unavailable - check FMOD_RESTORE_REPO (variable) and FMOD_RESTORE_TOKEN (secret) on ${{ github.repository }}."
             exit 1
           fi
 
-          if [ "${missing_license:-0}" = 1 ]; then
-            cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-
-          Set two secrets - this is all licensing needs now, no `.ulf` file:
-
-              UNITY_USERNAME   the e-mail of your Unity ID
-              UNITY_PASSWORD   that account's password
-
-          The activation action logs in as you, so:
-          * Personal seats have a daily activation/deactivation cap - do not debug by
-            hammering re-runs.
-          * If your Unity ID uses 2FA, plain password auth may be rejected; use an
-            app password or a non-2FA build account.
-          * Keep the `concurrency` guard, and keep fork PRs gated (see the `unity` job).
-          EOF
-            echo "::error::UNITY_USERNAME / UNITY_PASSWORD not set."
+          if [ "$missing" = 1 ]; then
+            echo "::error::a required secret or variable is unset (see the job summary table)."
             exit 1
           fi
 
