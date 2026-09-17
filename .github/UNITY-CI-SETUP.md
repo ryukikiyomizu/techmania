@@ -59,38 +59,48 @@ The version this project was last updated against is **2.03.12** (upstream
    commit nothing from this project back to the public repo except, optionally, the
    `.gitignore` note below.
 
-## 2. Pack it — keep the `.meta` files
+## 2. Pack only what CI needs
 
-The `.meta` files carry the GUIDs Unity already resolved. Shipping them keeps every
-run byte-identical to your editor and avoids a reimport of every audio asset.
+CI compiles the project; it does not play it. Of FMOD's 40-90 MB, the per-platform native
+binaries (Windows/macOS/Linux/iOS/Android, x86 and x64) are essentially all of the weight,
+and nothing compiles from them. Keep the C#, the `.asmdef`, and the `.meta` files - the
+last because they carry the GUIDs Unity already resolved, which keeps the import
+byte-identical to your editor instead of re-resolving every asset.
 
-**No terminal needed.** In File Explorer go to
-`...\Techmania source\TECHMANIA\Assets\Plugins`, **right-click the `FMOD` folder
-itself** → *Compress to ZIP file* (Win10: *Send to → Compressed (zipped) folder*).
-The name doesn't matter — `FMOD.zip` is fine, because the private repo in step 3 holds
-nothing else for CI to mistake it for.
+From `...\Techmania source\TECHMANIA\Assets\Plugins` in PowerShell:
 
-The one rule: zip the **folder**, not its contents. Right-clicking `FMOD` and zipping
-gives entries like `FMOD/src/...`, which is exactly what the restore step extracts into
-`Assets/Plugins`. Opening the folder, Ctrl-A, and zipping gives `src/...` and fails. If
-you ever doubt it, double-click the zip: the first thing you see must be the `FMOD`
-folder.
-
-Prefer a tarball? It also works, and must be laid out the same way (one top-level
-`FMOD/`):
-
-```bash
-tar -czf ../fmod-unity-2.03.12.tar.gz -C TECHMANIA/Assets/Plugins FMOD
-tar -tzf ../fmod-unity-2.03.12.tar.gz | head -5   # must start with "FMOD/"
+```powershell
+tar -czf "$HOME\fmod-code.tar.gz" -C . FMOD `
+  --exclude='*/bin/*' --exclude='*.dll'  --exclude='*.so'    --exclude='*.dylib' `
+  --exclude='*.a'    --exclude='*.lib'   --exclude='*.exp'   --exclude='*.aar' `
+  --exclude='*.framework' --exclude='FMOD/Cache/*'
+tar -tzf "$HOME\fmod-code.tar.gz" | Select-Object -First 3   # must start with FMOD/
+"{0:N1} MB" -f ((Get-Item "$HOME\fmod-code.tar.gz").Length/1MB)
 ```
 
-A failed `tar` can leave an empty `.tar.gz` behind, so if you try this route delete any
-half-made archive first — `tar -tzf` on a 0-byte file prints nothing at all, which looks
-deceptively like a pass.
+Expect **1-4 MB**. That is not cosmetic: GitHub's *Add file -> Upload files* refuses
+anything over **25 MB**, and a right-click `FMOD.zip` of the whole folder is routinely
+four to ten times that. So don't zip the whole folder - it cannot be uploaded by browser,
+and CI has no use for the parts that made it big.
 
-Only `src`, `platforms` and `Resources` actually matter for compiling (three files use
-`FMOD.*` / `FMODUnity.*` types, all in `Assets/Scripts/Fmod/`), but ship the whole
-folder — `Cache/` and `images/` cost little and something always wants them.
+The layout rule is unchanged and is the one thing that breaks runs: the archive must
+contain a single top-level `FMOD/` directory. Open it and the first thing you see must be
+`FMOD`, not `src`. (`-C . FMOD` in the command above is what guarantees that; the restore
+step verifies it and, if wrong, prints the archive's first entries so the mistake is
+visible in the log.)
+
+Two follow-ons worth knowing:
+
+- Unity will warn about `.meta` files whose binaries you excluded. Cosmetic for a
+  compile check; `Cache/` is regenerable and `images/` is editor icons.
+- A **player build** in CI needs the real folder, because `fmodstudio.dll` has to be
+  copied into the build. That means the full archive as a *release asset* (2 GB per file)
+  rather than a committed file, and I would point the workflow at it. Not needed for what
+  this workflow is for.
+
+A failed `tar` can leave an empty `.tar.gz` behind, and `tar -tzf` on a 0-byte file prints
+*nothing at all* rather than an error - which reads like a pass. Delete half-made
+archives before retrying, and check the MB line is not 0.
 
 ## 3. Put it in a private sibling repo
 
@@ -103,27 +113,9 @@ tree, and CI reads it with one read-only token. Five screens, no terminal:
 2. On the new repo: **Add file → Upload files** → drag the archive in → **Commit
    changes**. Top level of the repo, not inside a folder.
 
-   The web upload refuses anything over **25 MB**, and a whole FMOD folder is usually
-   40-90 MB because it carries native binaries for every platform. CI does not need
-   those: it compiles, and only the C# headers and `.asmdef` files matter for that (the
-   `x86`/`x86_64` native folders are already committed in techmania itself). So strip
-   them — one command, from inside `TECHMANIA\Assets\Plugins`:
+   If the upload is refused, you packed the whole folder - see section 2, which strips the
+   native binaries CI never compiles from.
 
-   ```powershell
-   tar -czf "$HOME\fmod-code.tar.gz" -C . FMOD `
-     --exclude='*/bin/*' --exclude='*.dll'  --exclude='*.so'    --exclude='*.dylib' `
-     --exclude='*.a'    --exclude='*.lib'   --exclude='*.exp'   --exclude='*.aar' `
-     --exclude='*.framework' --exclude='FMOD/Cache/*'
-   tar -tzf "$HOME\fmod-code.tar.gz" | Select-Object -First 3   # must start with FMOD/
-   "{0:N1} MB" -f ((Get-Item "$HOME\fmod-code.tar.gz").Length/1MB)
-   ```
-
-   Expect roughly 1-4 MB. The archive is then picked up automatically: the restore step
-   takes any `.zip` or `.tar.gz` it finds, so this needs no workflow change. Unity will
-   log warnings about orphaned `.meta` files for the stripped binaries - that is
-   cosmetic and only ever matters for a player build, which this trimmed archive cannot
-   produce. If you later want CI to build the .exe itself, the full folder has to go in
-   as a *release asset* instead (2 GB limit) and I would point the workflow at that.
 3. `github.com/settings/personal-access-tokens/new` → fine-grained → name it
    `ci-fmod-read` → *Repository access:* **Only select repositories** → pick
    `techmania-ci-deps` → *Repository permissions* → **Contents: Read-only** →
