@@ -25,9 +25,11 @@ on:
     branches: [master]
 
 # A Personal seat is held for the whole job; never let two runs race for it.
+# Deliberately NOT cancel-in-progress: a run is ~20-40 min of import plus one of the
+# seat's limited daily activations, so cancelling finished work costs more than queueing.
 concurrency:
   group: unity-ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   PROJECT_PATH: TECHMANIA
