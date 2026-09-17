@@ -100,8 +100,30 @@ tree, and CI reads it with one read-only token. Five screens, no terminal:
 
 1. `github.com/new` → owner `ryukikiyomizu` → name `techmania-ci-deps` → **Private** →
    tick *Add a README* → *Create repository*.
-2. On the new repo: **Add file → Upload files** → drag the zip in → **Commit changes**.
-   Top level of the repo, not inside a folder.
+2. On the new repo: **Add file → Upload files** → drag the archive in → **Commit
+   changes**. Top level of the repo, not inside a folder.
+
+   The web upload refuses anything over **25 MB**, and a whole FMOD folder is usually
+   40-90 MB because it carries native binaries for every platform. CI does not need
+   those: it compiles, and only the C# headers and `.asmdef` files matter for that (the
+   `x86`/`x86_64` native folders are already committed in techmania itself). So strip
+   them — one command, from inside `TECHMANIA\Assets\Plugins`:
+
+   ```powershell
+   tar -czf "$HOME\fmod-code.tar.gz" -C . FMOD `
+     --exclude='*/bin/*' --exclude='*.dll'  --exclude='*.so'    --exclude='*.dylib' `
+     --exclude='*.a'    --exclude='*.lib'   --exclude='*.exp'   --exclude='*.aar' `
+     --exclude='*.framework' --exclude='FMOD/Cache/*'
+   tar -tzf "$HOME\fmod-code.tar.gz" | Select-Object -First 3   # must start with FMOD/
+   "{0:N1} MB" -f ((Get-Item "$HOME\fmod-code.tar.gz").Length/1MB)
+   ```
+
+   Expect roughly 1-4 MB. The archive is then picked up automatically: the restore step
+   takes any `.zip` or `.tar.gz` it finds, so this needs no workflow change. Unity will
+   log warnings about orphaned `.meta` files for the stripped binaries - that is
+   cosmetic and only ever matters for a player build, which this trimmed archive cannot
+   produce. If you later want CI to build the .exe itself, the full folder has to go in
+   as a *release asset* instead (2 GB limit) and I would point the workflow at that.
 3. `github.com/settings/personal-access-tokens/new` → fine-grained → name it
    `ci-fmod-read` → *Repository access:* **Only select repositories** → pick
    `techmania-ci-deps` → *Repository permissions* → **Contents: Read-only** →
