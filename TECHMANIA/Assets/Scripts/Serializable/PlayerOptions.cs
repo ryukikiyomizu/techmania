@@ -4,8 +4,6 @@ using System.Collections.Generic;
 // options.json inside a profile folder — player-side preferences only.
 // Machine settings (graphics, audio hw, data paths, latency) stay in
 // Documents\TECHMANIA\options.json and are never overlaid by this class.
-// The operator's theme options (arcade lifecycle, countdown clock, attract
-// screen) are machine settings too — see MachineThemeOptions.
 //
 // At login:  PlayerOptions.ApplyTo(Options.instance) overlays these fields.
 // At save:   PlayerOptions.ExtractFrom(Options.instance) captures changes.
@@ -108,12 +106,8 @@ public class PlayerOptions : PlayerOptionsBase
         if (opts.themeOptions != null)
         {
             foreach (var kv in opts.themeOptions)
-            {
-                Dictionary<string, string> playerThemeOptions =
+                p.themeOptions[kv.Key] =
                     new Dictionary<string, string>(kv.Value);
-                MachineThemeOptions.StripFrom(kv.Key, playerThemeOptions);
-                p.themeOptions[kv.Key] = playerThemeOptions;
-            }
         }
 
         return p;
@@ -160,22 +154,13 @@ public class PlayerOptions : PlayerOptionsBase
         opts.inMemoryPerTrackOptions = new Dictionary<string, PerTrackOptions>(
             perTrackOptions);
 
-        // Replace entirely — clear stale keys before merging so previous
-        // player's theme options don't bleed into this session. Cabinet-scoped
-        // keys (arcade lifecycle, clock, attract, operator diagnostics) are
-        // carried across untouched; see MachineThemeOptions.
+        // Replace entirely — clear stale keys before merging so the previous
+        // player's theme options don't bleed into this session.
         if (opts.themeOptions == null)
             opts.themeOptions = new Dictionary<string, Dictionary<string, string>>();
-        Dictionary<string, string> machineScopedOptions =
-            MachineThemeOptions.Capture(opts);
         opts.themeOptions.Clear();
         foreach (var kv in themeOptions)
-        {
-            Dictionary<string, string> playerThemeOptions =
+            opts.themeOptions[kv.Key] =
                 new Dictionary<string, string>(kv.Value);
-            MachineThemeOptions.StripFrom(kv.Key, playerThemeOptions);
-            opts.themeOptions[kv.Key] = playerThemeOptions;
-        }
-        MachineThemeOptions.Restore(opts, machineScopedOptions);
     }
 }

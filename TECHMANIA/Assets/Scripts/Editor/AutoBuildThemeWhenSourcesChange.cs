@@ -41,7 +41,7 @@ public static class AutoBuildThemeWhenSourcesChange
             : DateTime.MinValue;
 
         DateTime newestSourceWriteTime = DateTime.MinValue;
-        foreach (string folder in new[] { "Assets/UI", "Assets/T3" })
+        foreach (string folder in new[] { "Assets/UI" })
         {
             if (!Directory.Exists(folder))
             {

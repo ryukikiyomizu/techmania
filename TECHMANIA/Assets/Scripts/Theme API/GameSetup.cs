@@ -84,28 +84,6 @@ namespace ThemeApi
         public VisualElementWrap bgContainer;
         public VisualElementWrap gameContainer;  // Notes, game UI
         public VisualElementWrap vfxComboContainer;
-        // Optional theme-owned layer used by the T2 Star guide. TECHMANIA
-        // positions its pre-styled hand elements over upcoming notes while
-        // the theme remains responsible for the authentic artwork.
-        public VisualElementWrap guideContainer;
-        public bool guideEnabled;
-
-        // Optional attract-mode window. When enabled, playable notes outside
-        // this scan range are removed before NoteManager creates any visual or
-        // judgement objects. Hidden audio/timing notes remain in the pattern.
-        public bool demoPlayableNoteWindowEnabled;
-        public int demoPlayableNoteFirstScan;
-        public int demoPlayableNoteLastScanExclusive;
-
-        [MoonSharpHidden]
-        public void ApplyDemoPlayableNoteWindow()
-        {
-            if (!demoPlayableNoteWindowEnabled) return;
-
-            DemoPlayableNoteFilter.Apply(patternAfterModifier,
-                demoPlayableNoteFirstScan,
-                demoPlayableNoteLastScanExclusive);
-        }
 
         // Audio
 

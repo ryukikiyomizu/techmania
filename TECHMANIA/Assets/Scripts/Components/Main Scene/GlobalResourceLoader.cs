@@ -1052,8 +1052,7 @@ public class GlobalResourceLoader : MonoBehaviour
     private bool ShouldLoadLiveEditorTheme()
     {
         return Application.isEditor &&
-            (Options.instance.theme == Options.kDefaultTheme ||
-            Options.instance.theme == "Technika 2");
+            Options.instance.theme == Options.kDefaultTheme;
     }
 #endif
 

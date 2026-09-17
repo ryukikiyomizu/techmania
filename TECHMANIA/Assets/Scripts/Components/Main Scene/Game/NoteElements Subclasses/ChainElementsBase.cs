@@ -19,27 +19,6 @@ public class ChainElementsBase : NoteElements
     // May be null.
     protected ChainNodeElements nextChainNode;
 
-    // The head remains the presentation owner for the whole gesture even
-    // after gameplay resolves and removes it from NoteManager.notesInLane.
-    // Surviving nodes use this reference so Star GUIDE can claim/reclaim one
-    // continuous hand during dense or high-BPM chains.
-    public ChainElementsBase GuideChainHead { get; private set; }
-
-    // The T2 Star guide is a single continuous gesture across a chain. Expose
-    // the already-authored link read-only so the presentation layer can glide
-    // through the same node graph the note renderer uses.
-    public ChainNodeElements NextChainNodeForGuide => nextChainNode;
-
-    public void AssignGuideChainHeadToLinkedNodes()
-    {
-        ChainElementsBase current = this;
-        while (current != null)
-        {
-            current.GuideChainHead = this;
-            current = current.NextChainNodeForGuide;
-        }
-    }
-
     public void SetNextChainNode(ChainNodeElements nextChainNode)
     {
         this.nextChainNode = nextChainNode;

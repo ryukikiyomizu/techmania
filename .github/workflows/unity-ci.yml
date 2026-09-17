@@ -1,0 +1,270 @@
+name: Unity CI (compile + EditMode tests)
+
+# Unity's asset-import pass compiles every script in the project, so "the project
+# imported" == "the C# compiles". This workflow fails on any `error CS` and then runs
+# the retained EditMode suites.
+#
+# Licensing uses RageAgainstThePixel/activate-unity-license. Its action.yml declares a
+# `post:` handler, which is what returns the Personal seat when the job ends - do not
+# pin it to a mutable tag like @main, or that cleanup can change under you.
+#
+# Read the preflight job first: this repo deliberately cannot compile as cloned,
+# because FMOD for Unity is gitignored (TECHMANIA/.gitignore) while
+# Assets/Scripts/Fmod/*.cs depends on its `FMOD.*` types.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'TECHMANIA/Assets/**/*.cs'
+      - 'TECHMANIA/Assets/Plugins/**'
+      - 'TECHMANIA/Packages/**'
+      - 'TECHMANIA/ProjectSettings/**'
+      - '.github/workflows/unity-ci.yml'
+  push:
+    branches: [master]
+
+# A Personal seat is held for the whole job; never let two runs race for it.
+concurrency:
+  group: unity-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_PATH: TECHMANIA
+  # Only informational - buildalon/unity-setup resolves the real version from
+  # ProjectVersion.txt via `version-file`, so these cannot silently drift apart.
+  BUILD_TARGET: StandaloneWindows64
+
+jobs:
+  preflight:
+    name: Preflight (FMOD + credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Summarise prerequisites
+        env:
+          UNITY_USERNAME: ${{ secrets.UNITY_USERNAME }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          FMOD_RELEASE: ${{ vars.FMOD_RESTORE_RELEASE }}
+          FMOD_TOKEN: ${{ secrets.FMOD_RESTORE_TOKEN }}
+        run: |
+          rows=()
+          if [ -d "$PROJECT_PATH/Assets/Plugins/FMOD" ]; then
+            rows+=("| FMOD for Unity | committed in the repo |")
+          elif [ -n "$FMOD_RELEASE" ] && [ -n "$FMOD_TOKEN" ]; then
+            rows+=("| FMOD for Unity | restored from \`$FMOD_RELEASE\` |")
+          else
+            rows+=("| FMOD for Unity | **MISSING** |")
+            missing_fmod=1
+          fi
+          if [ -n "$UNITY_USERNAME" ] && [ -n "$UNITY_PASSWORD" ]; then
+            rows+=("| \`UNITY_USERNAME\` + \`UNITY_PASSWORD\` | present |")
+          else
+            rows+=("| \`UNITY_USERNAME\` + \`UNITY_PASSWORD\` | **MISSING** |")
+            missing_license=1
+          fi
+          rows+=("| Runner | \`windows-latest\` (matches the project's Windows-only native plugins) |")
+
+          {
+            echo "### Unity CI prerequisites"
+            echo
+            echo '| item | status |'
+            echo '|---|---|'
+            printf '%s\n' "${rows[@]}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${missing_fmod:-0}" = 1 ]; then
+            cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+
+          `TECHMANIA/.gitignore` excludes the FMOD integration on purpose:
+
+              # FMOD - developers should acquire their own license, then download
+              # "FMOD for Unity" ... then import into project.
+              /[Aa]ssets/Plugins/FMOD/
+
+          `FmodManager.cs`, `FmodChannelWrap.cs` and `FmodSoundWrap.cs` therefore have
+          no `FMOD.*` types to compile against. Pack the imported folder and host it on a
+          **private** repo (FMOD's license is why it cannot live here), then set
+          `FMOD_RESTORE_RELEASE` and `FMOD_RESTORE_TOKEN`. Full steps:
+          `.github/UNITY-CI-SETUP.md`.
+          EOF
+            echo "::error::FMOD for Unity is neither committed nor restorable - no compile check can pass."
+            exit 1
+          fi
+
+          if [ "${missing_license:-0}" = 1 ]; then
+            cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+
+          Set two secrets - this is all licensing needs now, no `.ulf` file:
+
+              UNITY_USERNAME   the e-mail of your Unity ID
+              UNITY_PASSWORD   that account's password
+
+          The activation action logs in as you, so:
+          * Personal seats have a daily activation/deactivation cap - do not debug by
+            hammering re-runs.
+          * If your Unity ID uses 2FA, plain password auth may be rejected; use an
+            app password or a non-2FA build account.
+          * Keep the `concurrency` guard, and keep fork PRs gated (see the `unity` job).
+          EOF
+            echo "::error::UNITY_USERNAME / UNITY_PASSWORD not set."
+            exit 1
+          fi
+
+  unity:
+    name: Compile + EditMode tests
+    needs: preflight
+    # Only run for PRs from this repo, never from a fork: fork runs cannot read
+    # secrets, and a PR that edits the workflow should not get a shot at them.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 1,031 committed cache files (208 MB) buy Unity nothing - the one under
+      # Assets/ would be imported as a TextAsset - and they are pure import noise.
+      - name: Drop the committed graphify cache
+        run: |
+          rm -rf "$PROJECT_PATH/graphify-out" "$PROJECT_PATH/Assets/Scripts/graphify-out"
+          du -sh "$PROJECT_PATH"
+
+      - name: Restore FMOD for Unity
+        env:
+          GH_TOKEN: ${{ secrets.FMOD_RESTORE_TOKEN }}
+        run: |
+          [ -d "$PROJECT_PATH/Assets/Plugins/FMOD" ] && exit 0
+          spec="${{ vars.FMOD_RESTORE_RELEASE }}"
+          [ -n "$spec" ] || { echo "FMOD absent and FMOD_RESTORE_RELEASE unset"; exit 1; }
+          repo=${spec%%:*}; tag=${spec##*:}
+          # Accepts either container; a zip straight from Explorer's context menu is the
+          # low-friction route, tar.gz if you packed it by hand.
+          gh release download "$tag" -R "$repo" -p 'fmod-*' -D /tmp
+          mkdir -p "$PROJECT_PATH/Assets/Plugins"
+          archive=$(ls /tmp/fmod-*.zip /tmp/fmod-*.tar.gz /tmp/fmod-*.tgz 2>/dev/null | head -1)
+          [ -n "$archive" ] || { echo "no fmod-*.zip / .tar.gz asset on $spec"; exit 1; }
+          case "$archive" in
+            *.zip)
+              # Explorer roots a zipped folder at <folder>/, which is what we need; the
+              # check below catches the other way of zipping. Expand-Archive is a Windows
+              # program, so it needs Windows-style paths, not the msys ones bash has.
+              winzip=$(cygpath -w "$archive")
+              windst=$(cygpath -w "$PROJECT_PATH/Assets/Plugins")
+              powershell -NoProfile -Command \
+                "Expand-Archive -LiteralPath '$winzip' -DestinationPath '$windst' -Force"
+              ;;
+            *) tar -xzf "$archive" -C "$PROJECT_PATH/Assets/Plugins" ;;
+          esac
+          if [ ! -d "$PROJECT_PATH/Assets/Plugins/FMOD" ]; then
+            echo "::error::archive did not contain a top-level FMOD/ folder - re-zip the folder itself, not its contents."
+            exit 1
+          fi
+          echo "FMOD restored: $(find "$PROJECT_PATH/Assets/Plugins/FMOD" -name '*.cs' | wc -l) scripts."
+
+      # Resolves 6000.3.9f1 from ProjectVersion.txt, so the editor can never drift
+      # from what the project was last saved with. Caches the installation itself.
+      - name: Install Unity
+        uses: buildalon/unity-setup@v2.6.0
+        id: unity-setup
+        with:
+          version-file: ${{ env.PROJECT_PATH }}/ProjectSettings/ProjectVersion.txt
+          build-targets: ${{ env.BUILD_TARGET }}
+          cache-installation: true
+
+      - name: Activate Unity license
+        id: license
+        uses: RageAgainstThePixel/activate-unity-license@v2.2.2
+        with:
+          license: Personal
+          username: ${{ secrets.UNITY_USERNAME }}
+          password: ${{ secrets.UNITY_PASSWORD }}
+          license-version: '6.x'
+
+      # The Library is the slow part. This one step both restores (exact key, else the
+      # newest prefix match) and re-saves in its post phase. Keyed on ProjectVersion.txt
+      # as well, because a Library written by a different editor version is worse than no
+      # cache at all.
+      - name: Restore Library cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PROJECT_PATH }}/Library
+          key: library-${{ runner.os }}-${{ hashFiles(format('{0}/ProjectSettings/ProjectVersion.txt', env.PROJECT_PATH), format('{0}/Packages/packages-lock.json', env.PROJECT_PATH)) }}
+          restore-keys: |
+            library-${{ runner.os }}-
+
+      - name: Prepare results dir
+        run: mkdir -p "$PROJECT_PATH/TestResults"
+
+      # This step alone is the compile check.
+      - name: Unity import (= script compilation)
+        id: import
+        uses: buildalon/unity-action@v3.1.0
+        with:
+          log-name: import
+          build-target: ${{ env.BUILD_TARGET }}
+          args: '-quit -batchmode -nographics'
+
+      # Kept separate and non-blocking: a failure here means "tests could not run"
+      # (e.g. nunit not referenced into Assembly-CSharp-Editor), which is NOT the same
+      # as "the project does not compile". See .github/UNITY-CI-SETUP.md for the
+      # Tests.asmdef fix.
+      - name: EditMode tests
+        id: tests
+        continue-on-error: true
+        uses: buildalon/unity-action@v3.1.0
+        with:
+          log-name: tests
+          build-target: ${{ env.BUILD_TARGET }}
+          args: >-
+            -quit -batchmode -nographics -runTests -testPlatform EditMode
+            -testResults "${{ github.workspace }}/${{ env.PROJECT_PATH }}/TestResults/editmode.xml"
+
+      - name: Fail on any script compile error
+        if: always()
+        run: |
+          found=0
+          # unity-action names the log from `log-name`, and its working directory is
+          # not documented, so search for logs instead of assuming where they landed.
+          logs=$(find . -maxdepth 4 -name '*.log' -type f 2>/dev/null | head -20)
+          echo "candidate logs:"; echo "$logs"
+          while IFS= read -r log; do
+            [ -n "$log" ] || continue
+            if grep -nE 'error CS[0-9]+' "$log" > /tmp/cs-errors.txt; then
+              found=1
+              echo "--- $log"
+              head -40 /tmp/cs-errors.txt
+              {
+                echo "### \`error CS\` in $log"
+                echo '```'
+                head -60 /tmp/cs-errors.txt
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+          done <<< "$logs"
+          if [ "$found" = 1 ]; then exit 1; fi
+          echo "No script compilation errors."
+          if [ "${{ steps.tests.outcome }}" = "failure" ]; then
+            echo "::warning::Project compiles, but EditMode tests did not complete - check Logs/tests.log."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unity-results
+          path: |
+            **/*.log
+            ${{ env.PROJECT_PATH }}/TestResults
+          if-no-files-found: warn
+          retention-days: 7
