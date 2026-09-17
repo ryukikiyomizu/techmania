@@ -670,8 +670,6 @@ public class GameController : MonoBehaviour
         noteManager?.Dispose();
         input?.Dispose();
         vfxAndComboText?.Dispose();
-        starGuideOverlay?.HideAll();
-        starGuideOverlay = null;
 
         Resources.UnloadUnusedAssets();
         ScriptSession.session.DoString("collectgarbage()");
