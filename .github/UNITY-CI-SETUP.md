@@ -61,27 +61,32 @@ The version this project was last updated against is **2.03.12** (upstream
 
 ## 2. Pack only what CI needs
 
-CI compiles the project; it does not play it. Of FMOD's 40-90 MB, the per-platform native
-binaries (Windows/macOS/Linux/iOS/Android, x86 and x64) are essentially all of the weight,
-and nothing compiles from them. Keep the C#, the `.asmdef`, and the `.meta` files - the
-last because they carry the GUIDs Unity already resolved, which keeps the import
-byte-identical to your editor instead of re-resolving every asset.
+CI compiles the project and *runs EditMode tests*, so it needs FMOD's C# surface plus the
+native library those tests touch at startup. What it never needs is every other platform.
+Drop those and keep the `.meta` files (they carry the GUIDs Unity already resolved, so the
+import stays byte-identical to your editor).
 
 From `...\Techmania source\TECHMANIA\Assets\Plugins` in PowerShell:
 
 ```powershell
-tar -czf "$HOME\fmod-code.tar.gz" -C . FMOD `
-  --exclude='*/bin/*' --exclude='*.dll'  --exclude='*.so'    --exclude='*.dylib' `
-  --exclude='*.a'    --exclude='*.lib'   --exclude='*.exp'   --exclude='*.aar' `
-  --exclude='*.framework' --exclude='FMOD/Cache/*'
-tar -tzf "$HOME\fmod-code.tar.gz" | Select-Object -First 3   # must start with FMOD/
-"{0:N1} MB" -f ((Get-Item "$HOME\fmod-code.tar.gz").Length/1MB)
+tar -czf "$HOME\fmod-ci.tar.gz" -C . FMOD `
+  --exclude='*.a'      --exclude='*.o'    --exclude='*.so'   --exclude='*.dylib' `
+  --exclude='*.aar'    --exclude='*.lib'  --exclude='*.exp'  --exclude='*.ilk' `
+  --exclude='*.framework' --exclude='*.bundle' `
+  --exclude='*/x86' --exclude='*/x86/*' --exclude='FMOD/Cache/*'
+tar -tzf "$HOME\fmod-ci.tar.gz" | Select-Object -First 3   # must start with FMOD/
+"{0:N1} MB" -f ((Get-Item "$HOME\fmod-ci.tar.gz").Length/1MB)
 ```
 
-Expect **1-4 MB**. That is not cosmetic: GitHub's *Add file -> Upload files* refuses
-anything over **25 MB**, and a right-click `FMOD.zip` of the whole folder is routinely
-four to ten times that. So don't zip the whole folder - it cannot be uploaded by browser,
-and CI has no use for the parts that made it big.
+Expect roughly **8-15 MB** - under the **25 MB** browser upload cap, so it goes in through
+*Add file -> Upload files*.
+
+Why these particular excludes, since a tighter list looks arbitrary: an earlier version also
+dropped `*.dll`, and the import step passed while the EditMode tests died with
+`Unity failed with exit code 2147942526` - that number is `0x8007007E`, Windows
+`ERROR_MOD_NOT_FOUND`, because `fmodstudio.dll` was gone. So Windows x64 natives stay,
+iOS `.a` / Android `.aar` / macOS `.dylib` / Linux `.so` go, and the 32-bit `x86` copies go
+because the runner is x64.
 
 The layout rule is unchanged and is the one thing that breaks runs: the archive must
 contain a single top-level `FMOD/` directory. Open it and the first thing you see must be

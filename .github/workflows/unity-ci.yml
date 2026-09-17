@@ -241,7 +241,7 @@ jobs:
             library-${{ runner.os }}-
 
       - name: Prepare results dir
-        run: mkdir -p "$PROJECT_PATH/TestResults" "$GITHUB_WORKSPACE/Logs"
+        run: mkdir -p "$PROJECT_PATH/TestResults" Logs
 
       # This step alone is the compile check.
       - name: Unity import (= script compilation)
@@ -277,19 +277,21 @@ jobs:
           # The action's log location depends on its cwd, which is undocumented, so gather
           # every candidate into Logs/ first. Last run this step grepped nothing and
           # reported success while Unity had actually failed - a false negative.
-          for d in "$GITHUB_WORKSPACE/Logs" "$PROJECT_PATH/Logs" "$PROJECT_PATH" "$RUNNER_TEMP" "$RUNNER_TEMP/workflow"; do
+          # Relative paths only: on a Windows runner $GITHUB_WORKSPACE is D:\a\..., which
+          # bash cannot use and silently makes every lookup below a no-op.
+          for d in Logs "$PROJECT_PATH/Logs" "$PROJECT_PATH" "$RUNNER_TEMP" "$RUNNER_TEMP/workflow"; do
             [ -d "$d" ] || continue
             while IFS= read -r f; do
               case "$f" in *TestResults*) continue ;; esac
-              cp -n -- "$f" "$GITHUB_WORKSPACE/Logs/" 2>/dev/null || true
+              cp -n -- "$f" Logs/ 2>/dev/null || true
             done < <(find "$d" -maxdepth 3 -name '*.log' -type f 2>/dev/null)
           done
-          logs=$(find "$GITHUB_WORKSPACE/Logs" -maxdepth 1 -name '*.log' -type f | sort)
+          logs=$(find Logs -maxdepth 1 -name '*.log' -type f | sort)
           echo "collected: $(echo "$logs" | grep -c . ) log file(s)"
           echo "$logs" | while IFS= read -r f; do [ -n "$f" ] && echo "  $(wc -c <"$f") bytes  $f"; done
 
           if echo "$logs" | grep -q .; then
-            if grep -rhE 'error CS[0-9]+' "$GITHUB_WORKSPACE/Logs" > /tmp/cs.txt 2>/dev/null; then
+            if grep -rhE 'error CS[0-9]+' Logs > /tmp/cs.txt 2>/dev/null; then
               sort -u -o /tmp/cs.txt /tmp/cs.txt
               head -30 /tmp/cs.txt
               {
@@ -307,12 +309,16 @@ jobs:
           if [ "${{ steps.import.outcome }}" = "failure" ] && [ ! -s /tmp/cs.txt ]; then
             # Unity exited non-zero with no compiler error: an import/asset failure. Without
             # this the cause is only in a log nobody can read from here.
-            last=$( (tail -20 "$GITHUB_WORKSPACE/Logs/import.log" 2>/dev/null || echo "(no log captured)") \
+            last=$( (tail -20 Logs/import.log Logs/tests.log 2>/dev/null | head -20 || echo "(no log captured)") \
                     | tr '\n' '|' | sed -e 's/|/%0A/g' -e 's/\x1b\[[0-9;]*m//g' )
             echo "::error::Unity failed with no compile errors. Tail of import.log:%0A${last:0:1200}"
             exit 1
           fi
           if [ -s /tmp/cs.txt ]; then exit 1; fi
+          if [ "${{ steps.tests.outcome }}" = "failure" ]; then
+            t=$( (grep -hE 'ERROR|Exception|failed to load|Unable to load' Logs/tests.log 2>/dev/null | tail -6 | tr '\n' '|' | sed -e 's/|/%0A/g' -e 's/\x1b\[[0-9;]*m//g') || true)
+            [ -n "$t" ] && echo "::error::EditMode tests failed to complete:%0A${t:0:900}"
+          fi
           if [ "${{ steps.import.outcome }}" != "success" ]; then exit 1; fi
           echo "No script compilation errors."
           if [ "${{ steps.tests.outcome }}" = "failure" ]; then
