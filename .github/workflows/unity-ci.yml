@@ -51,6 +51,7 @@ jobs:
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
           FMOD_REPO: ${{ vars.FMOD_RESTORE_REPO }}
           FMOD_TOKEN: ${{ secrets.FMOD_RESTORE_TOKEN }}
+          FMOD_TOKEN_VAR: ${{ vars.FMOD_RESTORE_TOKEN }}
         run: |
           # Name each item separately: "FMOD missing" sent people hunting through four
           # settings pages when only one of them was wrong.
@@ -96,6 +97,13 @@ jobs:
           fi
           if [ -z "$FMOD_TOKEN" ]; then
             echo "::error::FMOD_RESTORE_TOKEN is unset - it must be a repository SECRET (Settings -> Secrets and variables -> Actions -> Secrets tab) on ${{ github.repository }}"
+          fi
+
+          # The two tabs look interchangeable and are not: a token saved under Variables is
+          # stored in plain text, is not masked in logs, and is invisible to secrets.*.
+          if [ -z "$FMOD_TOKEN" ] && [ -n "$FMOD_TOKEN_VAR" ]; then
+            echo "::error::FMOD_RESTORE_TOKEN was filed as a VARIABLE (visible in the Variables tab). It must be a SECRET: delete that row, then on the Secrets tab add FMOD_RESTORE_TOKEN with the same value. Variables are plaintext and unmasked; secrets are neither."
+            exit 1
           fi
 
           if [ ! -d "$PROJECT_PATH/Assets/Plugins/FMOD" ] && \
