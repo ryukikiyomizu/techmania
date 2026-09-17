@@ -27,12 +27,12 @@ until CI is given the folder out-of-band. That is the entire reason for steps 1-
 
 | # | kind | name | value |
 |---|---|---|---|
-| 1 | repo **variable** | `FMOD_RESTORE_RELEASE` | `ryukikiyomizu/techmania-ci-deps:fmod-unity-2.03.12` |
+| 1 | repo **variable** | `FMOD_RESTORE_REPO` | `ryukikiyomizu/techmania-ci-deps` |
 | 2 | secret | `FMOD_RESTORE_TOKEN` | fine-grained PAT, `Contents: Read-only`, scoped to that one private repo |
 | 3 | secret | `UNITY_USERNAME` | the e-mail of your Unity ID |
 | 4 | secret | `UNITY_PASSWORD` | that account's password |
 
-Names must match exactly; the workflow reads `vars.FMOD_RESTORE_RELEASE` and those
+Names must match exactly; the workflow reads `vars.FMOD_RESTORE_REPO` and those
 `secrets.*`.
 
 There is **no `.ulf` file to deal with any more** — the activation action logs in with the
@@ -67,8 +67,8 @@ run byte-identical to your editor and avoids a reimport of every audio asset.
 **No terminal needed.** In File Explorer go to
 `...\Techmania source\TECHMANIA\Assets\Plugins`, **right-click the `FMOD` folder
 itself** → *Compress to ZIP file* (Win10: *Send to → Compressed (zipped) folder*).
-Then rename the result to `fmod-unity-2.03.12.zip` — the `fmod-` prefix is what the CI
-step looks for.
+The name doesn't matter — `FMOD.zip` is fine, because the private repo in step 3 holds
+nothing else for CI to mistake it for.
 
 The one rule: zip the **folder**, not its contents. Right-clicking `FMOD` and zipping
 gives entries like `FMOD/src/...`, which is exactly what the restore step extracts into
@@ -92,38 +92,34 @@ Only `src`, `platforms` and `Resources` actually matter for compiling (three fil
 `FMOD.*` / `FMODUnity.*` types, all in `Assets/Scripts/Fmod/`), but ship the whole
 folder — `Cache/` and `images/` cost little and something always wants them.
 
-## 3. Host it privately, as a release asset
+## 3. Put it in a private sibling repo
 
 The fork is **public**, so FMOD's SDK must not go in it — its licence is exactly why
 `/[Aa]ssets/Plugins/FMOD/` exists. A separate private repo keeps it out of the public
-tree. All of this is clickable in the browser:
+tree, and CI reads it with one read-only token. Five screens, no terminal:
 
-1. `github.com/new` → owner `ryukikiyomizu`, name `techmania-ci-deps`, **Private**,
-   tick *Add a README*, create.
-2. On the new repo: **Add file → Upload files** → drop the zip in → commit. (This keeps a
-   copy in git; the release below is what CI actually pulls.)
-3. **Releases → Draft a new release** → tag `fmod-unity-2.03.12`, title anything,
-   *Attach binaries* → pick the same zip → **Publish release**. The tag string is what
-   goes in the variable, so write it down exactly.
-4. `github.com/settings/personal-access-tokens/new` → Fine-grained → name it,
-   Repository access = **Only select repositories** → `techmania-ci-deps` →
-   Permissions → *Contents*: **Read-only** → generate → copy the token.
-5. Back on the **techmania** repo: Settings → Secrets and variables → Actions →
-   *Variables* tab → New: `FMOD_RESTORE_RELEASE` = `ryukikiyomizu/techmania-ci-deps:fmod-unity-2.03.12`
-   (note: `owner/repo:tag`, one colon, no `@`). Then *Secrets* tab → New:
-   `FMOD_RESTORE_TOKEN` = the token from step 4.
+1. `github.com/new` → owner `ryukikiyomizu` → name `techmania-ci-deps` → **Private** →
+   tick *Add a README* → *Create repository*.
+2. On the new repo: **Add file → Upload files** → drag the zip in → **Commit changes**.
+   Top level of the repo, not inside a folder.
+3. `github.com/settings/personal-access-tokens/new` → fine-grained → name it
+   `ci-fmod-read` → *Repository access:* **Only select repositories** → pick
+   `techmania-ci-deps` → *Repository permissions* → **Contents: Read-only** →
+   *Generate token* → copy it now, it is shown once.
+4. `github.com/ryukikiyomizu/techmania/settings/secrets and variables/actions` →
+   **Variables** tab → *New repository variable* →
+   name `FMOD_RESTORE_REPO`, value `ryukikiyomizu/techmania-ci-deps`.
+5. Same page, **Secrets** tab → *New repository secret* →
+   name `FMOD_RESTORE_TOKEN`, value the token from step 3.
 
-Same thing in four lines, if you have `gh` installed:
+That is the whole setup. It deliberately stores the zip as a *committed file* rather than
+a release asset: a release needs a tag spelled identically in two places, and that
+mismatch is the most common way this breaks. One name, one place, and the restore step
+takes any `.zip` it finds.
 
-```bash
-gh repo create ryukikiyomizu/techmania-ci-deps --private --description "build deps"
-cd ../techmania-ci-deps && gh release create fmod-unity-2.03.12 ..\fmod-unity-2.03.12.zip --title "FMOD for Unity 2.03.12"
-gh variable set FMOD_RESTORE_RELEASE -R ryukikiyomizu/techmania -b "ryukikiyomizu/techmania-ci-deps:fmod-unity-2.03.12"
-gh secret set FMOD_RESTORE_TOKEN -R ryukikiyomizu/techmania   # paste the PAT
-```
-
-The PAT can never read your repos' settings, and it is scoped to one repo, so losing it
-means: delete it on the token settings page and make another.
+The token can read that one repo's files and nothing else — not settings, not your other
+repos. If you lose track of it: `github.com/settings/personal-access-tokens` → delete →
+make another → replace the secret.
 
 ## 4. The Unity license
 
@@ -161,14 +157,15 @@ of that one screen.
 |---|---|---|
 | Secrets tab | `UNITY_USERNAME` | your Unity ID e-mail |
 | Secrets tab | `UNITY_PASSWORD` | that account's password |
-| Secrets tab | `FMOD_RESTORE_TOKEN` | the fine-grained PAT from step 3.4 |
-| **Variables** tab | `FMOD_RESTORE_RELEASE` | `ryukikiyomizu/techmania-ci-deps:fmod-unity-2.03.12` |
+| Secrets tab | `FMOD_RESTORE_TOKEN` | the read-only PAT from step 3 |
+| **Variables** tab | `FMOD_RESTORE_REPO` | `ryukikiyomizu/techmania-ci-deps` |
 
 A misspelled *name* is the classic silent failure: the workflow just reports the item as
 missing. Verify without leaving the browser by re-opening that page, or with
 `gh secret list && gh variable list`.
 
-The two Unity secrets are already in place. If you ever prefer the CLI over the web
+Both Unity secrets are already in place, which is why the first run of PR #1 stopped
+at preflight and named FMOD as the only remaining blocker. If you ever prefer the CLI over the web
 forms, `gh secret set UNITY_PASSWORD` prompts and pipes nothing to a file or a chat log.
 
 ## 6. Run it
@@ -195,7 +192,7 @@ so a run may queue.
 
 | symptom | meaning |
 |---|---|
-| `preflight` fails, summary says FMOD MISSING | step 1-3 not done, or `FMOD_RESTORE_RELEASE`/`FMOD_RESTORE_TOKEN` wrong |
+| `preflight` fails, summary says FMOD MISSING | step 1-3 not done, or `FMOD_RESTORE_REPO` / `FMOD_RESTORE_TOKEN` wrong |
 | `preflight` fails, "`UNITY_USERNAME` / `UNITY_PASSWORD` not set" | step 4 |
 | `error CS0246: The type or namespace name 'FMOD'` | restore ran but the archive layout is wrong — re-check step 2's `tar -tzf` |
 | `Logs/tests.log` mentions NUnit but the compile step passed | expected pre-existing gap, see below — it is *not* a compile failure |

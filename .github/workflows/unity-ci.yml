@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -49,14 +49,14 @@ jobs:
         env:
           UNITY_USERNAME: ${{ secrets.UNITY_USERNAME }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-          FMOD_RELEASE: ${{ vars.FMOD_RESTORE_RELEASE }}
+          FMOD_REPO: ${{ vars.FMOD_RESTORE_REPO }}
           FMOD_TOKEN: ${{ secrets.FMOD_RESTORE_TOKEN }}
         run: |
           rows=()
           if [ -d "$PROJECT_PATH/Assets/Plugins/FMOD" ]; then
             rows+=("| FMOD for Unity | committed in the repo |")
-          elif [ -n "$FMOD_RELEASE" ] && [ -n "$FMOD_TOKEN" ]; then
-            rows+=("| FMOD for Unity | restored from \`$FMOD_RELEASE\` |")
+          elif [ -n "$FMOD_REPO" ] && [ -n "$FMOD_TOKEN" ]; then
+            rows+=("| FMOD for Unity | restored from \`$FMOD_REPO\` |")
           else
             rows+=("| FMOD for Unity | **MISSING** |")
             missing_fmod=1
@@ -89,7 +89,8 @@ jobs:
           `FmodManager.cs`, `FmodChannelWrap.cs` and `FmodSoundWrap.cs` therefore have
           no `FMOD.*` types to compile against. Pack the imported folder and host it on a
           **private** repo (FMOD's license is why it cannot live here), then set
-          `FMOD_RESTORE_RELEASE` and `FMOD_RESTORE_TOKEN`. Full steps:
+          `FMOD_RESTORE_REPO` (the repo) and `FMOD_RESTORE_TOKEN` (a read-only token for
+          it). Full steps:
           `.github/UNITY-CI-SETUP.md`.
           EOF
             echo "::error::FMOD for Unity is neither committed nor restorable - no compile check can pass."
@@ -129,7 +130,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -140,25 +141,44 @@ jobs:
           rm -rf "$PROJECT_PATH/graphify-out" "$PROJECT_PATH/Assets/Scripts/graphify-out"
           du -sh "$PROJECT_PATH"
 
-      - name: Restore FMOD for Unity
+      # FMOD lives in a small PRIVATE sibling repo (its licence forbids putting it in a
+      # public one). A committed file rather than a release asset: the tag on a release has
+      # to be spelled identically in two places, which is the most common way this breaks.
+      - name: Fetch the deps repo
+        if: ${{ vars.FMOD_RESTORE_REPO != '' }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.FMOD_RESTORE_REPO }}
+          token: ${{ secrets.FMOD_RESTORE_TOKEN }}
+          path: .fmod-deps
+          fetch-depth: 1
+
+      - name: Unpack FMOD for Unity
         env:
-          GH_TOKEN: ${{ secrets.FMOD_RESTORE_TOKEN }}
+          # via env:, not inline ${{ }}: the expression is pasted into the script text
+          # before bash sees it, so a stray quote in the value would become syntax.
+          FMOD_REPO: ${{ vars.FMOD_RESTORE_REPO }}
         run: |
           [ -d "$PROJECT_PATH/Assets/Plugins/FMOD" ] && exit 0
-          spec="${{ vars.FMOD_RESTORE_RELEASE }}"
-          [ -n "$spec" ] || { echo "FMOD absent and FMOD_RESTORE_RELEASE unset"; exit 1; }
-          repo=${spec%%:*}; tag=${spec##*:}
-          # Accepts either container; a zip straight from Explorer's context menu is the
-          # low-friction route, tar.gz if you packed it by hand.
-          gh release download "$tag" -R "$repo" -p 'fmod-*' -D /tmp
+          [ -d .fmod-deps ] || {
+            echo "::error::no FMOD in the tree and FMOD_RESTORE_REPO ('$FMOD_REPO') is unusable"
+            exit 1
+          }
+          # Any archive will do - this repo exists only to hold this one file, so there
+          # is nothing to confuse it with, and Explorer's default name is FMOD.zip.
+          archive=$(find .fmod-deps -maxdepth 2 -type f \
+                      \( -iname '*.zip' -o -iname '*.tar.gz' -o -iname '*.tgz' \) | sort | head -1)
+          if [ -z "$archive" ]; then
+            echo "::error::no .zip / .tar.gz committed at the top of $FMOD_REPO"
+            echo "contents were:"; find .fmod-deps -maxdepth 1 -type f
+            exit 1
+          fi
+          echo "unpacking $archive"
           mkdir -p "$PROJECT_PATH/Assets/Plugins"
-          archive=$(ls /tmp/fmod-*.zip /tmp/fmod-*.tar.gz /tmp/fmod-*.tgz 2>/dev/null | head -1)
-          [ -n "$archive" ] || { echo "no fmod-*.zip / .tar.gz asset on $spec"; exit 1; }
           case "$archive" in
             *.zip)
-              # Explorer roots a zipped folder at <folder>/, which is what we need; the
-              # check below catches the other way of zipping. Expand-Archive is a Windows
-              # program, so it needs Windows-style paths, not the msys ones bash has.
+              # Explorer roots a zipped folder at <folder>/, which is what we need.
+              # Expand-Archive is a Windows program, so it needs Windows paths, not msys.
               winzip=$(cygpath -w "$archive")
               windst=$(cygpath -w "$PROJECT_PATH/Assets/Plugins")
               powershell -NoProfile -Command \
@@ -167,9 +187,13 @@ jobs:
             *) tar -xzf "$archive" -C "$PROJECT_PATH/Assets/Plugins" ;;
           esac
           if [ ! -d "$PROJECT_PATH/Assets/Plugins/FMOD" ]; then
-            echo "::error::archive did not contain a top-level FMOD/ folder - re-zip the folder itself, not its contents."
+            echo "::error::archive had no top-level FMOD/ folder - zip the folder itself, not its contents"
+            echo "the archive contained:"; tar -tzf "$archive" 2>/dev/null | head -5 \
+              || python3 -c "import zipfile;print('\n'.join(zipfile.ZipFile(r'$archive').namelist()[:5]))" 2>/dev/null
             exit 1
           fi
+          # after the check, so a bad archive still leaves the file to look at
+          rm -rf .fmod-deps
           echo "FMOD restored: $(find "$PROJECT_PATH/Assets/Plugins/FMOD" -name '*.cs' | wc -l) scripts."
 
       # Resolves 6000.3.9f1 from ProjectVersion.txt, so the editor can never drift
@@ -196,7 +220,7 @@ jobs:
       # as well, because a Library written by a different editor version is worse than no
       # cache at all.
       - name: Restore Library cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.PROJECT_PATH }}/Library
           key: library-${{ runner.os }}-${{ hashFiles(format('{0}/ProjectSettings/ProjectVersion.txt', env.PROJECT_PATH), format('{0}/Packages/packages-lock.json', env.PROJECT_PATH)) }}
@@ -259,7 +283,7 @@ jobs:
             echo "::warning::Project compiles, but EditMode tests did not complete - check Logs/tests.log."
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: unity-results
