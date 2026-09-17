@@ -182,7 +182,13 @@ of that one screen.
 | Secrets tab | `FMOD_RESTORE_TOKEN` | the read-only PAT from step 3 |
 | **Variables** tab | `FMOD_RESTORE_REPO` | `ryukikiyomizu/techmania-ci-deps` |
 
-A misspelled *name* is the classic silent failure: the workflow just reports the item as
+**Variables and Secrets are two tabs of one page and they are not interchangeable.**
+Anything filed under *Variables* is readable as `vars.NAME`, stored as plaintext, and is
+**not** masked in workflow logs; CI will still call it "unset" because it looks in
+`secrets.*`. `FMOD_RESTORE_REPO` is deliberately a variable (it is only a repo name), the
+token is deliberately a secret.
+
+A misspelled *name* is the other classic silent failure: the workflow just reports the item as
 missing. Verify without leaving the browser by re-opening that page, or with
 `gh secret list && gh variable list`.
 
