@@ -89,6 +89,15 @@ jobs:
             echo "repository one, is invisible to this run."
           } >> "$GITHUB_STEP_SUMMARY"
 
+          # Annotations, not just the summary: the summary is only readable in the web
+          # UI, and "which one is missing" is the whole question at this point.
+          if [ -z "$FMOD_REPO" ]; then
+            echo "::error::FMOD_RESTORE_REPO is unset - it must be a repository VARIABLE (Settings -> Secrets and variables -> Actions -> Variables tab) on ${{ github.repository }}"
+          fi
+          if [ -z "$FMOD_TOKEN" ]; then
+            echo "::error::FMOD_RESTORE_TOKEN is unset - it must be a repository SECRET (Settings -> Secrets and variables -> Actions -> Secrets tab) on ${{ github.repository }}"
+          fi
+
           if [ ! -d "$PROJECT_PATH/Assets/Plugins/FMOD" ] && \
              { [ -z "$FMOD_REPO" ] || [ -z "$FMOD_TOKEN" ]; }; then
             cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
