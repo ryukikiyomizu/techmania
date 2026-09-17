@@ -179,8 +179,15 @@ jobs:
           }
           # Any archive will do - this repo exists only to hold this one file, so there
           # is nothing to confuse it with, and Explorer's default name is FMOD.zip.
-          archive=$(find .fmod-deps -maxdepth 2 -type f \
-                      \( -iname '*.zip' -o -iname '*.tar.gz' -o -iname '*.tgz' \) | sort | head -1)
+          # If a re-pack leaves two archives behind, "whichever sort() picks" is a
+          # landmine - prefer the current name and say so out loud when stale ones remain.
+          match="\( -iname '*.zip' -o -iname '*.tar.gz' -o -iname '*.tgz' \)"
+          archive=$(find .fmod-deps -maxdepth 2 -type f -iname 'fmod-ci.*' | sort | head -1)
+          [ -n "$archive" ] || archive=$(eval "find .fmod-deps -maxdepth 2 -type f $match" | sort | head -1)
+          count=$(eval "find .fmod-deps -maxdepth 2 -type f $match" | wc -l)
+          if [ "$count" -gt 1 ]; then
+            echo "::warning::$count archives in the deps repo; using $(basename "$archive"). Delete the rest or a future re-pack picks the wrong one."
+          fi
           if [ -z "$archive" ]; then
             echo "::error::no .zip / .tar.gz committed at the top of $FMOD_REPO"
             echo "contents were:"; find .fmod-deps -maxdepth 1 -type f
