@@ -294,6 +294,12 @@ jobs:
             done < <(find "$d" -maxdepth 3 -name '*.log' -type f 2>/dev/null)
           done
           logs=$(find Logs -maxdepth 1 -name '*.log' -type f | sort)
+          if ! echo "$logs" | grep -q .; then
+            # Third round trip lost to this: the action's log path is not documented, and
+            # an empty Logs/ is indistinguishable from a passing import. Say where we are.
+            loc=$(find /d/a -maxdepth 4 -name 'import.log' -type f 2>/dev/null | head -3 | tr '\n' ' ')
+            echo "::warning::no log under Logs/. pwd=$(pwd) ls=$(ls Logs 2>&1 | tr '\n' ' ') searched=$(find /d/a -maxdepth 4 -name '*.log' -type f 2>/dev/null | wc -l) found=${loc:-none}"
+          fi
           echo "collected: $(echo "$logs" | grep -c . ) log file(s)"
           echo "$logs" | while IFS= read -r f; do [ -n "$f" ] && echo "  $(wc -c <"$f") bytes  $f"; done
 
@@ -324,7 +330,7 @@ jobs:
           if [ -s /tmp/cs.txt ]; then exit 1; fi
           if [ "${{ steps.tests.outcome }}" = "failure" ]; then
             t=$( (grep -hE 'ERROR|Exception|failed to load|Unable to load' Logs/tests.log 2>/dev/null | tail -6 | tr '\n' '|' | sed -e 's/|/%0A/g' -e 's/\x1b\[[0-9;]*m//g') || true)
-            [ -n "$t" ] && echo "::error::EditMode tests failed to complete:%0A${t:0:900}"
+            echo "::warning::EditMode tests did not complete (Unity exit is separate from compile status)${t:+:%0A${t:0:900}}"
           fi
           if [ "${{ steps.import.outcome }}" != "success" ]; then exit 1; fi
           echo "No script compilation errors."
