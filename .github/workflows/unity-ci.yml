@@ -260,12 +260,25 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path Logs | Out-Null
           $unity = Join-Path $env:UNITY_EDITOR_PATH Unity.exe
-          if (-not (Test-Path $unity)) { " UNITY_EDITOR_PATH not found: $env:UNITY_EDITOR_PATH"; exit 2 }
+          $log = Join-Path $env:GITHUB_WORKSPACE "Logs\import.log"
+          if (-not (Test-Path $unity)) {
+            "::error::Unity.exe not found. UNITY_EDITOR_PATH=[$env:UNITY_EDITOR_PATH] cwd=$(Get-Location)"
+            exit 2
+          }
           & $unity -batchmode -nographics -quit `
             -projectPath (Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_PATH) `
-            -logFile (Join-Path (Get-Location) "Logs\import.log")
-          "Unity exit code: $LASTEXITCODE"
-          exit $LASTEXITCODE
+            -logFile $log | Out-Null
+          $code = $LASTEXITCODE
+          # One annotation carrying everything knowable from here: the editor's exit code,
+          # whether it wrote a log at all, and the tail when it did. A run costs an
+          # activation, so this step has to answer the question on its own.
+          if (Test-Path $log) {
+            $flat = ((Get-Content $log -Tail 30 -ErrorAction SilentlyContinue) -join ' | ') -replace '[^\x20-\x7E]','?'
+            "::error::Unity exit $code; log tail: $($flat.Substring(0,[Math]::Min(900,$flat.Length)))"
+          } else {
+            "::error::Unity exit $code and NO LOG written at $log (cwd=$(Get-Location))"
+          }
+          exit $code
 
       - name: EditMode tests
         id: tests
@@ -295,7 +308,8 @@ jobs:
               cp -n -- "$f" Logs/ 2>/dev/null || true
             done < <(find "$d" -maxdepth 3 -name '*.log' -type f 2>/dev/null)
           done
-          logs=$(find Logs -maxdepth 1 -name '*.log' -type f | sort)
+          logs=$(find Logs -maxdepth 1 -name '*.log' -type f 2>/dev/null | sort || true)
+          logs=${logs:-}
           if ! echo "$logs" | grep -q .; then
             # Third round trip lost to this: the action's log path is not documented, and
             # an empty Logs/ is indistinguishable from a passing import. Say where we are.
