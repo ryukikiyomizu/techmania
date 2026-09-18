@@ -224,7 +224,26 @@ jobs:
         with:
           version-file: ${{ env.PROJECT_PATH }}/ProjectSettings/ProjectVersion.txt
           build-targets: ${{ env.BUILD_TARGET }}
-          cache-installation: true
+          # Caching the editor is what broke this workflow. The run that installed Unity
+          # cold got as far as reporting compile errors; every run since restored the
+          # cached install and died with 0x8007007E (ERROR_MOD_NOT_FOUND) before writing a
+          # log - i.e. Unity.exe itself could not start. A multi-GB editor install is past
+          # where actions/cache is trustworthy, so pay the download instead.
+          cache-installation: false
+
+      - name: Verify the editor starts
+        shell: pwsh
+        run: |
+          $u = $env:UNITY_EDITOR_PATH
+          if ($u -notmatch 'Unity(\.exe)?$') { $u = Join-Path $u 'Unity.exe' }
+          if ($u -notmatch '\.exe$') { $u += '.exe' }
+          if (-not (Test-Path $u)) { "::error::Unity.exe missing at $u"; exit 1 }
+          $v = & $u -version 2>&1 | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) {
+            "::error::installed editor cannot run (exit $LASTEXITCODE): $v - the Unity install on this runner is broken, not the project"
+            exit 1
+          }
+          "editor responds: $v"
 
       - name: Activate Unity license
         id: license
@@ -234,18 +253,6 @@ jobs:
           username: ${{ secrets.UNITY_USERNAME }}
           password: ${{ secrets.UNITY_PASSWORD }}
           license-version: '6.x'
-
-      # The Library is the slow part. This one step both restores (exact key, else the
-      # newest prefix match) and re-saves in its post phase. Keyed on ProjectVersion.txt
-      # as well, because a Library written by a different editor version is worse than no
-      # cache at all.
-      - name: Restore Library cache
-        uses: actions/cache@v6
-        with:
-          path: ${{ env.PROJECT_PATH }}/Library
-          key: library-${{ runner.os }}-${{ hashFiles(format('{0}/ProjectSettings/ProjectVersion.txt', env.PROJECT_PATH), format('{0}/Packages/packages-lock.json', env.PROJECT_PATH)) }}
-          restore-keys: |
-            library-${{ runner.os }}-
 
       - name: Prepare results dir
         run: mkdir -p "$PROJECT_PATH/TestResults" Logs
