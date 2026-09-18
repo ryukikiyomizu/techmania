@@ -250,33 +250,35 @@ jobs:
       - name: Prepare results dir
         run: mkdir -p "$PROJECT_PATH/TestResults" Logs
 
-      # This step alone is the compile check.
+      # Unity is invoked directly rather than through buildalon/unity-action: the action
+      # supplies its own -logFile and relocates the log in its post step, which ran *after*
+      # the scan below and made a failed import look like a passing one. Native PowerShell
+      # also keeps every path in the form the editor expects, with no msys translation.
       - name: Unity import (= script compilation)
         id: import
-        continue-on-error: true
-        uses: buildalon/unity-action@v3.1.0
-        with:
-          log-name: import
-          build-target: ${{ env.BUILD_TARGET }}
-          args: >-
-            -quit -batchmode -nographics
-            -logFile "${{ github.workspace }}/Logs/import.log"
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path Logs | Out-Null
+          $unity = Join-Path $env:UNITY_EDITOR_PATH Unity.exe
+          if (-not (Test-Path $unity)) { " UNITY_EDITOR_PATH not found: $env:UNITY_EDITOR_PATH"; exit 2 }
+          & $unity -batchmode -nographics -quit `
+            -projectPath (Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_PATH) `
+            -logFile (Join-Path (Get-Location) "Logs\import.log")
+          "Unity exit code: $LASTEXITCODE"
+          exit $LASTEXITCODE
 
-      # Kept separate and non-blocking: a failure here means "tests could not run"
-      # (e.g. nunit not referenced into Assembly-CSharp-Editor), which is NOT the same
-      # as "the project does not compile". See .github/UNITY-CI-SETUP.md for the
-      # Tests.asmdef fix.
       - name: EditMode tests
         id: tests
         continue-on-error: true
-        uses: buildalon/unity-action@v3.1.0
-        with:
-          log-name: tests
-          build-target: ${{ env.BUILD_TARGET }}
-          args: >-
-            -quit -batchmode -nographics -runTests -testPlatform EditMode
-            -testResults "${{ github.workspace }}/${{ env.PROJECT_PATH }}/TestResults/editmode.xml"
-            -logFile "${{ github.workspace }}/Logs/tests.log"
+        shell: pwsh
+        run: |
+          & (Join-Path $env:UNITY_EDITOR_PATH Unity.exe) -batchmode -nographics -quit `
+            -projectPath (Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_PATH) `
+            -runTests -testPlatform EditMode `
+            -testResults (Join-Path $env:GITHUB_WORKSPACE "$env:PROJECT_PATH\TestResults\editmode.xml") `
+            -logFile (Join-Path (Get-Location) "Logs\tests.log")
+          "Unity exit code: $LASTEXITCODE"
+          exit $LASTEXITCODE
 
       - name: Scan Unity logs
         if: always()
