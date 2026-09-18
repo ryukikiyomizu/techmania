@@ -21,11 +21,6 @@ public class GameInputManager
     private GameLayout layout;
     private NoteManager noteManager;
     private GameTimer timer;
-    private Pattern pattern;
-    private HumanPlayRunContext humanPlayRunContext;
-    private HumanPlayScheduler humanPlayScheduler;
-
-    public bool humanPlaytesterActive => humanPlayScheduler != null;
 
     public List<List<KeyCode>> keysForLane { get; private set; }
 
@@ -34,8 +29,7 @@ public class GameInputManager
         GameController controller,
         GameLayout layout,
         NoteManager noteManager,
-        GameTimer timer,
-        HumanPlayRunContext humanPlayRunContext)
+        GameTimer timer)
     {
         scheme = pattern.patternMetadata.controlScheme;
         lanes = pattern.patternMetadata.playableLanes;
@@ -44,8 +38,6 @@ public class GameInputManager
         this.layout = layout;
         this.noteManager = noteManager;
         this.timer = timer;
-        this.pattern = pattern;
-        this.humanPlayRunContext = humanPlayRunContext;
     }
 
     public void Prepare()
@@ -57,14 +49,6 @@ public class GameInputManager
         ongoingNoteIsHitOnThisFrame = new
             Dictionary<NoteElements, bool>();
         ongoingNoteLastInput = new Dictionary<NoteElements, float>();
-
-#if TECHMANIA_HUMAN_PLAYTESTER
-        if (HumanPlaytesterSettings.IsEnabled())
-        {
-            humanPlayScheduler = HumanPlayScheduler.Create(
-                pattern, humanPlayRunContext);
-        }
-#endif
 
         // Prepare keycodes for keyboard input.
         keysForLane = new List<List<KeyCode>>();
@@ -157,7 +141,6 @@ public class GameInputManager
     public void Dispose()
     {
         keysForLane.Clear();
-        humanPlayScheduler = null;
     }
 
     #region Update
@@ -217,11 +200,6 @@ public class GameInputManager
         if (controller.autoPlay)
         {
             HandleAutoPlay();
-        }
-        else if (humanPlaytesterActive)
-        {
-            HandleHumanPlaytester();
-            CheckForBreak();
         }
         else
         {
@@ -329,50 +307,6 @@ public class GameInputManager
                 controller.HitNote(upcoming, 0f);
             }
         }
-    }
-
-    private void HandleHumanPlaytester()
-    {
-        foreach (NoteElements elements in
-            new List<NoteElements>(ongoingNotes.Keys))
-        {
-            HumanPlayAction action = humanPlayScheduler.ActionFor(
-                elements.note);
-            if (humanPlayScheduler.ShouldHold(action, timer.gameTime))
-            {
-                ongoingNoteIsHitOnThisFrame[elements] = true;
-            }
-        }
-
-        for (int lane = 0; lane < lanes; lane++)
-        {
-            int resolvedThisFrame = 0;
-            while (!noteManager.notesInLane[lane].IsEmpty() &&
-                resolvedThisFrame < 8)
-            {
-                NoteElements upcoming = noteManager.notesInLane[lane]
-                    .First() as NoteElements;
-                if (ongoingNotes.ContainsKey(upcoming)) break;
-
-                HumanPlayAction action = humanPlayScheduler.ActionFor(
-                    upcoming.note);
-                if (action == null ||
-                    action.kind == HumanPlayActionKind.Skip ||
-                    !humanPlayScheduler.ShouldStart(action, timer.gameTime))
-                {
-                    break;
-                }
-
-                controller.HitNote(upcoming, action.timingOffset);
-                resolvedThisFrame++;
-                if (ongoingNotes.ContainsKey(upcoming)) break;
-            }
-        }
-    }
-
-    public void LogHumanPlaytesterResult(ScoreKeeper scoreKeeper)
-    {
-        humanPlayScheduler?.LogResult(scoreKeeper);
     }
 
     private void CheckForBreak()

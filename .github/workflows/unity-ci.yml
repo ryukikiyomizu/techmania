@@ -1,0 +1,381 @@
+name: Unity CI (compile + EditMode tests)
+
+# Unity's asset-import pass compiles every script in the project, so "the project
+# imported" == "the C# compiles". This workflow fails on any `error CS` and then runs
+# the retained EditMode suites.
+#
+# Licensing uses RageAgainstThePixel/activate-unity-license. Its action.yml declares a
+# `post:` handler, which is what returns the Personal seat when the job ends - do not
+# pin it to a mutable tag like @main, or that cleanup can change under you.
+#
+# Read the preflight job first: this repo deliberately cannot compile as cloned,
+# because FMOD for Unity is gitignored (TECHMANIA/.gitignore) while
+# Assets/Scripts/Fmod/*.cs depends on its `FMOD.*` types.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'TECHMANIA/Assets/**/*.cs'
+      - 'TECHMANIA/Assets/Plugins/**'
+      - 'TECHMANIA/Packages/**'
+      - 'TECHMANIA/ProjectSettings/**'
+      - '.github/workflows/unity-ci.yml'
+  push:
+    branches: [master]
+
+# A Personal seat is held for the whole job; never let two runs race for it.
+# Deliberately NOT cancel-in-progress: a run is ~20-40 min of import plus one of the
+# seat's limited daily activations, so cancelling finished work costs more than queueing.
+concurrency:
+  group: unity-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT_PATH: TECHMANIA
+  # Only informational - buildalon/unity-setup resolves the real version from
+  # ProjectVersion.txt via `version-file`, so these cannot silently drift apart.
+  BUILD_TARGET: StandaloneWindows64
+
+jobs:
+  preflight:
+    name: Preflight (FMOD + credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Summarise prerequisites
+        env:
+          UNITY_USERNAME: ${{ secrets.UNITY_USERNAME }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          FMOD_REPO: ${{ vars.FMOD_RESTORE_REPO }}
+          FMOD_TOKEN: ${{ secrets.FMOD_RESTORE_TOKEN }}
+          FMOD_TOKEN_VAR: ${{ vars.FMOD_RESTORE_TOKEN }}
+        run: |
+          # Name each item separately: "FMOD missing" sent people hunting through four
+          # settings pages when only one of them was wrong.
+          rows=()
+          missing=0
+          chk() {
+            if [ -n "$2" ]; then
+              rows+=("| \`$1\` | $3 | present |")
+            else
+              rows+=("| \`$1\` | $3 | **MISSING** |")
+              missing=1
+            fi
+          }
+          chk FMOD_RESTORE_REPO   "$FMOD_REPO"     "variable"
+          chk FMOD_RESTORE_TOKEN  "$FMOD_TOKEN"    "secret"
+          chk UNITY_USERNAME      "$UNITY_USERNAME" "secret"
+          chk UNITY_PASSWORD      "$UNITY_PASSWORD" "secret"
+
+          if [ -d "$PROJECT_PATH/Assets/Plugins/FMOD" ]; then
+            rows+=("| FMOD for Unity | in the tree | already committed |")
+          elif [ -n "$FMOD_REPO" ] && [ -n "$FMOD_TOKEN" ]; then
+            rows+=("| FMOD for Unity | restore source | \`$FMOD_REPO\` |")
+          else
+            rows+=("| FMOD for Unity | **unavailable** | see note below |")
+          fi
+
+          {
+            echo "### Unity CI prerequisites"
+            echo
+            echo "| item | where it lives | status |"
+            echo '|---|---|---|'
+            printf '%s\n' "${rows[@]}"
+            echo
+            echo "CI reads these from \`${{ github.repository }}\` only - a variable set on"
+            echo "the deps repo, or filed as an *environment* variable instead of a"
+            echo "repository one, is invisible to this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Annotations, not just the summary: the summary is only readable in the web
+          # UI, and "which one is missing" is the whole question at this point.
+          if [ -z "$FMOD_REPO" ]; then
+            echo "::error::FMOD_RESTORE_REPO is unset - it must be a repository VARIABLE (Settings -> Secrets and variables -> Actions -> Variables tab) on ${{ github.repository }}"
+          fi
+          if [ -z "$FMOD_TOKEN" ]; then
+            echo "::error::FMOD_RESTORE_TOKEN is unset - it must be a repository SECRET (Settings -> Secrets and variables -> Actions -> Secrets tab) on ${{ github.repository }}"
+          fi
+
+          # The two tabs look interchangeable and are not: a token saved under Variables is
+          # stored in plain text, is not masked in logs, and is invisible to secrets.*.
+          if [ -z "$FMOD_TOKEN" ] && [ -n "$FMOD_TOKEN_VAR" ]; then
+            echo "::error::FMOD_RESTORE_TOKEN was filed as a VARIABLE (visible in the Variables tab). It must be a SECRET: delete that row, then on the Secrets tab add FMOD_RESTORE_TOKEN with the same value. Variables are plaintext and unmasked; secrets are neither."
+            exit 1
+          fi
+
+          if [ ! -d "$PROJECT_PATH/Assets/Plugins/FMOD" ] && \
+             { [ -z "$FMOD_REPO" ] || [ -z "$FMOD_TOKEN" ]; }; then
+            cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          FMOD for Unity cannot be restored, so `Assets/Scripts/Fmod/*.cs` has no `FMOD.*`
+          types to compile against and a compile check would be meaningless. Two ways out:
+
+          1. Set both `FMOD_RESTORE_REPO` (variable) and `FMOD_RESTORE_TOKEN` (secret) on
+             **this** repo - `Settings -> Secrets and variables -> Actions`, and note the
+             two tabs. Runbook: `.github/UNITY-CI-SETUP.md` section 3.
+          2. Nothing else is required for licensing at this point; `UNITY_USERNAME` and
+             `UNITY_PASSWORD` above are the whole of it.
+          EOF
+            echo "::error::FMOD unavailable - check FMOD_RESTORE_REPO (variable) and FMOD_RESTORE_TOKEN (secret) on ${{ github.repository }}."
+            exit 1
+          fi
+
+          if [ "$missing" = 1 ]; then
+            echo "::error::a required secret or variable is unset (see the job summary table)."
+            exit 1
+          fi
+
+  unity:
+    name: Compile + EditMode tests
+    needs: preflight
+    # Only run for PRs from this repo, never from a fork: fork runs cannot read
+    # secrets, and a PR that edits the workflow should not get a shot at them.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # 1,031 committed cache files (208 MB) buy Unity nothing - the one under
+      # Assets/ would be imported as a TextAsset - and they are pure import noise.
+      - name: Drop the committed graphify cache
+        run: |
+          rm -rf "$PROJECT_PATH/graphify-out" "$PROJECT_PATH/Assets/Scripts/graphify-out"
+          du -sh "$PROJECT_PATH"
+
+      # FMOD lives in a small PRIVATE sibling repo (its licence forbids putting it in a
+      # public one). A committed file rather than a release asset: the tag on a release has
+      # to be spelled identically in two places, which is the most common way this breaks.
+      - name: Fetch the deps repo
+        if: ${{ vars.FMOD_RESTORE_REPO != '' }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.FMOD_RESTORE_REPO }}
+          token: ${{ secrets.FMOD_RESTORE_TOKEN }}
+          path: .fmod-deps
+          fetch-depth: 1
+
+      - name: Unpack FMOD for Unity
+        env:
+          # via env:, not inline ${{ }}: the expression is pasted into the script text
+          # before bash sees it, so a stray quote in the value would become syntax.
+          FMOD_REPO: ${{ vars.FMOD_RESTORE_REPO }}
+        run: |
+          [ -d "$PROJECT_PATH/Assets/Plugins/FMOD" ] && exit 0
+          [ -d .fmod-deps ] || {
+            echo "::error::no FMOD in the tree and FMOD_RESTORE_REPO ('$FMOD_REPO') is unusable"
+            exit 1
+          }
+          # Any archive will do - this repo exists only to hold this one file, so there
+          # is nothing to confuse it with, and Explorer's default name is FMOD.zip.
+          # If a re-pack leaves two archives behind, "whichever sort() picks" is a
+          # landmine - prefer the current name and say so out loud when stale ones remain.
+          match="\( -iname '*.zip' -o -iname '*.tar.gz' -o -iname '*.tgz' \)"
+          archive=$(find .fmod-deps -maxdepth 2 -type f -iname 'fmod-ci.*' | sort | head -1)
+          [ -n "$archive" ] || archive=$(eval "find .fmod-deps -maxdepth 2 -type f $match" | sort | head -1)
+          count=$(eval "find .fmod-deps -maxdepth 2 -type f $match" | wc -l)
+          if [ "$count" -gt 1 ]; then
+            echo "::warning::$count archives in the deps repo; using $(basename "$archive"). Delete the rest or a future re-pack picks the wrong one."
+          fi
+          if [ -z "$archive" ]; then
+            echo "::error::no .zip / .tar.gz committed at the top of $FMOD_REPO"
+            echo "contents were:"; find .fmod-deps -maxdepth 1 -type f
+            exit 1
+          fi
+          echo "unpacking $archive"
+          mkdir -p "$PROJECT_PATH/Assets/Plugins"
+          case "$archive" in
+            *.zip)
+              # Explorer roots a zipped folder at <folder>/, which is what we need.
+              # Expand-Archive is a Windows program, so it needs Windows paths, not msys.
+              winzip=$(cygpath -w "$archive")
+              windst=$(cygpath -w "$PROJECT_PATH/Assets/Plugins")
+              powershell -NoProfile -Command \
+                "Expand-Archive -LiteralPath '$winzip' -DestinationPath '$windst' -Force"
+              ;;
+            *) tar -xzf "$archive" -C "$PROJECT_PATH/Assets/Plugins" ;;
+          esac
+          if [ ! -d "$PROJECT_PATH/Assets/Plugins/FMOD" ]; then
+            echo "::error::archive had no top-level FMOD/ folder - zip the folder itself, not its contents"
+            echo "the archive contained:"; tar -tzf "$archive" 2>/dev/null | head -5 \
+              || python3 -c "import zipfile;print('\n'.join(zipfile.ZipFile(r'$archive').namelist()[:5]))" 2>/dev/null
+            exit 1
+          fi
+          # after the check, so a bad archive still leaves the file to look at
+          rm -rf .fmod-deps
+          echo "FMOD restored: $(find "$PROJECT_PATH/Assets/Plugins/FMOD" -name '*.cs' | wc -l) scripts."
+
+      # Resolves 6000.3.9f1 from ProjectVersion.txt, so the editor can never drift
+      # from what the project was last saved with. Caches the installation itself.
+      - name: Install Unity
+        uses: buildalon/unity-setup@v2.6.0
+        id: unity-setup
+        with:
+          version-file: ${{ env.PROJECT_PATH }}/ProjectSettings/ProjectVersion.txt
+          build-targets: ${{ env.BUILD_TARGET }}
+          # Caching the editor is what broke this workflow. The run that installed Unity
+          # cold got as far as reporting compile errors; every run since restored the
+          # cached install and died with 0x8007007E (ERROR_MOD_NOT_FOUND) before writing a
+          # log - i.e. Unity.exe itself could not start. A multi-GB editor install is past
+          # where actions/cache is trustworthy, so pay the download instead.
+          cache-installation: false
+
+      - name: Verify the editor starts
+        shell: pwsh
+        run: |
+          $u = $env:UNITY_EDITOR_PATH
+          if ($u -notmatch 'Unity(\.exe)?$') { $u = Join-Path $u 'Unity.exe' }
+          if ($u -notmatch '\.exe$') { $u += '.exe' }
+          if (-not (Test-Path $u)) { "::error::Unity.exe missing at $u"; exit 1 }
+          $v = & $u -version 2>&1 | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) {
+            "::error::installed editor cannot run (exit $LASTEXITCODE): $v - the Unity install on this runner is broken, not the project"
+            exit 1
+          }
+          "editor responds: $v"
+
+      - name: Activate Unity license
+        id: license
+        uses: RageAgainstThePixel/activate-unity-license@v2.2.2
+        with:
+          license: Personal
+          username: ${{ secrets.UNITY_USERNAME }}
+          password: ${{ secrets.UNITY_PASSWORD }}
+          license-version: '6.x'
+
+      - name: Prepare results dir
+        run: mkdir -p "$PROJECT_PATH/TestResults" Logs
+
+      # Unity is invoked directly rather than through buildalon/unity-action: the action
+      # supplies its own -logFile and relocates the log in its post step, which ran *after*
+      # the scan below and made a failed import look like a passing one. Native PowerShell
+      # also keeps every path in the form the editor expects, with no msys translation.
+      - name: Unity import (= script compilation)
+        id: import
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path Logs | Out-Null
+          # buildalon/unity-setup exports UNITY_EDITOR_PATH as the *file*, not the Editor
+          # folder, so appending Unity.exe here produced "not found" for several runs.
+          $unity = $env:UNITY_EDITOR_PATH
+          if ($unity -notmatch 'Unity(\.exe)?$') { $unity = Join-Path $unity 'Unity.exe' }
+          if ($unity -notmatch "\.exe$") { $unity += '.exe' }
+          $log = Join-Path $env:GITHUB_WORKSPACE "Logs\import.log"
+          if (-not (Test-Path $unity)) {
+            "::error::Unity.exe not found. UNITY_EDITOR_PATH=[$env:UNITY_EDITOR_PATH] cwd=$(Get-Location)"
+            exit 2
+          }
+          & $unity -batchmode -nographics -quit `
+            -projectPath (Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_PATH) `
+            -logFile $log | Out-Null
+          $code = $LASTEXITCODE
+          # One annotation carrying everything knowable from here: the editor's exit code,
+          # whether it wrote a log at all, and the tail when it did. A run costs an
+          # activation, so this step has to answer the question on its own.
+          $flat = ''
+          if (Test-Path $log) {
+            $pat = if ($code -eq 0) { 'error CS|Exception|Aborting|imported in|Total:' } else { '.' }
+            $flat = ((Select-String -Path $log -Pattern $pat -ErrorAction SilentlyContinue | Select-Object -Last 12).Line -join ' | ') -replace '[^\x20-\x7E]','?'
+            if (-not $flat) { $flat = ((Get-Content $log -Tail 12) -join ' | ') -replace '[^\x20-\x7E]','?' }
+          } else { $flat = "NO LOG at $log" }
+          if ($code -ne 0) { "::error::Unity exit $code; $flat" }
+          "::notice::Unity exit $code; log=$(if (Test-Path $log) {'yes'} else {'MISSING'}); $flat"
+          exit $code
+
+      - name: EditMode tests
+        id: tests
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $t = $env:UNITY_EDITOR_PATH
+          if ($t -notmatch 'Unity(\.exe)?$') { $t = Join-Path $t 'Unity.exe' }
+          if ($t -notmatch "\.exe$") { $t += '.exe' }
+          & $t -batchmode -nographics -quit `
+            -projectPath (Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_PATH) `
+            -runTests -testPlatform EditMode `
+            -testResults (Join-Path $env:GITHUB_WORKSPACE "$env:PROJECT_PATH\TestResults\editmode.xml") `
+            -logFile (Join-Path (Get-Location) "Logs\tests.log")
+          "Unity exit code: $LASTEXITCODE"
+          exit $LASTEXITCODE
+
+      - name: Scan Unity logs
+        if: always()
+        run: |
+          # The action's log location depends on its cwd, which is undocumented, so gather
+          # every candidate into Logs/ first. Last run this step grepped nothing and
+          # reported success while Unity had actually failed - a false negative.
+          # Relative paths only: on a Windows runner $GITHUB_WORKSPACE is D:\a\..., which
+          # bash cannot use and silently makes every lookup below a no-op.
+          for d in Logs "$PROJECT_PATH/Logs" "$PROJECT_PATH" "$RUNNER_TEMP" "$RUNNER_TEMP/workflow"; do
+            [ -d "$d" ] || continue
+            while IFS= read -r f; do
+              case "$f" in *TestResults*) continue ;; esac
+              cp -n -- "$f" Logs/ 2>/dev/null || true
+            done < <(find "$d" -maxdepth 3 -name '*.log' -type f 2>/dev/null)
+          done
+          logs=$(find Logs -maxdepth 1 -name '*.log' -type f 2>/dev/null | sort || true)
+          logs=${logs:-}
+          if ! echo "$logs" | grep -q .; then
+            # Third round trip lost to this: the action's log path is not documented, and
+            # an empty Logs/ is indistinguishable from a passing import. Say where we are.
+            loc=$(find /d/a -maxdepth 4 -name 'import.log' -type f 2>/dev/null | head -3 | tr '\n' ' ')
+            echo "::warning::no log under Logs/. pwd=$(pwd) ls=$(ls Logs 2>&1 | tr '\n' ' ') searched=$(find /d/a -maxdepth 4 -name '*.log' -type f 2>/dev/null | wc -l) found=${loc:-none}"
+          fi
+          echo "collected: $(echo "$logs" | grep -c . ) log file(s)"
+          echo "$logs" | while IFS= read -r f; do [ -n "$f" ] && echo "  $(wc -c <"$f") bytes  $f"; done
+
+          if echo "$logs" | grep -q .; then
+            if grep -rhE 'error CS[0-9]+' Logs > /tmp/cs.txt 2>/dev/null; then
+              sort -u -o /tmp/cs.txt /tmp/cs.txt
+              head -30 /tmp/cs.txt
+              {
+                echo "### \`error CS\` found"
+                echo '```'
+                head -40 /tmp/cs.txt
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              one=$(head -1 /tmp/cs.txt | tr -d '\r' | cut -c1-300)
+              echo "::error::compile error: $one"
+              echo "count=$(grep -c . /tmp/cs.txt)" > /tmp/cscount
+            fi
+          fi
+
+          if [ "${{ steps.import.outcome }}" = "failure" ] && [ ! -s /tmp/cs.txt ]; then
+            # Unity exited non-zero with no compiler error: an import/asset failure. Without
+            # this the cause is only in a log nobody can read from here.
+            last=$( (tail -20 Logs/import.log Logs/tests.log 2>/dev/null | head -20 || echo "(no log captured)") \
+                    | tr '\n' '|' | sed -e 's/|/%0A/g' -e 's/\x1b\[[0-9;]*m//g' )
+            echo "::error::Unity failed with no compile errors. Tail of import.log:%0A${last:0:1200}"
+            exit 1
+          fi
+          if [ -s /tmp/cs.txt ]; then exit 1; fi
+          if [ "${{ steps.tests.outcome }}" = "failure" ]; then
+            t=$( (grep -hE 'ERROR|Exception|failed to load|Unable to load' Logs/tests.log 2>/dev/null | tail -6 | tr '\n' '|' | sed -e 's/|/%0A/g' -e 's/\x1b\[[0-9;]*m//g') || true)
+            echo "::warning::EditMode tests did not complete (Unity exit is separate from compile status)${t:+:%0A${t:0:900}}"
+          fi
+          if [ "${{ steps.import.outcome }}" != "success" ]; then exit 1; fi
+          echo "No script compilation errors."
+          if [ "${{ steps.tests.outcome }}" = "failure" ]; then
+            echo "::warning::project compiles; EditMode tests did not complete - see Logs/tests.log"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: unity-results
+          path: |
+            Logs
+            ${{ env.PROJECT_PATH }}/TestResults
+          if-no-files-found: warn
+          retention-days: 7

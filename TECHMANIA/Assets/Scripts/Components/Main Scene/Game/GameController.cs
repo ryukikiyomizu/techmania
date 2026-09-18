@@ -81,7 +81,6 @@ public class GameController : MonoBehaviour
     private GameInputManager input;
     private InputFeedbackManager inputFeedback;
     private VfxAndComboText vfxAndComboText;
-    private StarGuideOverlay starGuideOverlay;
     // Accessible from Lua via GameState.setlist.scoreKeeper
     public SetlistScoreKeeper setlistScoreKeeper { get; private set; }
     // Accessible from Lua via GameState.scoreKeeper
@@ -163,7 +162,6 @@ public class GameController : MonoBehaviour
         // If playing a setlist, resolve pattern reference.
         string trackFolder = "";
         string patternGuid = "";
-        Track loadedTrack = null;
         if (setup.setlist.enabled)
         {
             Setlist.PatternReference r = null;
@@ -228,7 +226,6 @@ public class GameController : MonoBehaviour
             try
             {
                 track = Track.LoadFromFile(trackPath) as Track;
-                loadedTrack = track;
             }
             catch (Exception ex)
             {
@@ -258,8 +255,6 @@ public class GameController : MonoBehaviour
             setup.patternAfterModifier = setup.patternBeforeModifier
                 .ApplyModifiers(setup.modifiers);
         }
-
-        setup.ApplyDemoPlayableNoteWindow();
 
         // Calculate fingerprints in preparation for records.
         setup.patternBeforeModifier.CalculateFingerprint();
@@ -515,16 +510,8 @@ public class GameController : MonoBehaviour
                 .patternMetadata.playableLanes);
 
         // Prepare for input.
-        HumanPlayRunContext humanPlayRunContext = new HumanPlayRunContext(
-            loadedTrack?.trackMetadata?.guid ?? "",
-            loadedTrack?.trackMetadata?.title ??
-                (EditorContext.inPreview ? "Editor Preview" : ""),
-            setup.patternBeforeModifier.patternMetadata.guid,
-            setup.patternBeforeModifier.patternMetadata.patternName,
-            setup.patternBeforeModifier.fingerprint,
-            setup.ruleset.ToString());
         input = new GameInputManager(setup.patternAfterModifier,
-            this, layout, noteManager, timer, humanPlayRunContext);
+            this, layout, noteManager, timer);
         input.Prepare();
 
         // Prepare for input feedback.
@@ -538,9 +525,6 @@ public class GameController : MonoBehaviour
             setup.vfxComboContainer.inner, timer, layout);
         vfxAndComboText.ResetSize(layout.laneHeight, layout.scanHeight);
         vfxAndComboText.HideComboText();
-
-        starGuideOverlay = new StarGuideOverlay(
-            setup.guideContainer?.inner, noteManager, timer);
 
         // Initialize scores.
         scoreKeeper = new ScoreKeeper(setup, state);
@@ -686,8 +670,6 @@ public class GameController : MonoBehaviour
         noteManager?.Dispose();
         input?.Dispose();
         vfxAndComboText?.Dispose();
-        starGuideOverlay?.HideAll();
-        starGuideOverlay = null;
 
         Resources.UnloadUnusedAssets();
         ScriptSession.session.DoString("collectgarbage()");
@@ -708,15 +690,15 @@ public class GameController : MonoBehaviour
 
     public bool ScoreIsValid()
     {
-        return HumanPlaytesterSettings.ScoreModifiersAreValid(
-                setup.modifiers, input != null && input.humanPlaytesterActive) &&
+        // No Fail and other non-scoring-altering modifiers stay valid;
+        // HasAnySpecialModifier() owns the invalidation rules.
+        return !setup.modifiers.HasAnySpecialModifier() &&
             !scoreKeeper.stageFailed;
     }
 
     public bool SetlistScoreIsValid()
     {
-        return HumanPlaytesterSettings.ScoreModifiersAreValid(
-                setup.modifiers, input != null && input.humanPlaytesterActive) &&
+        return !setup.modifiers.HasAnySpecialModifier() &&
             !setlistScoreKeeper.stageFailed;
     }
 
@@ -855,7 +837,6 @@ public class GameController : MonoBehaviour
             bg.Update(timer.baseTime, timer.prevFrameBaseTime);
             layout.Update(timer.scan);
             noteManager.Update(timer, scoreKeeper);
-            starGuideOverlay?.Update(setup.guideEnabled);
             input.Update();
             inputFeedback.Update(timer.scan);
             scoreKeeper.UpdateFever();
@@ -1028,7 +1009,6 @@ public class GameController : MonoBehaviour
             judgementAndTimeDifference.timeDifference);
         if (scoreKeeper.AllNotesResolved())
         {
-            input.LogHumanPlaytesterResult(scoreKeeper);
             setup.onAllNotesResolved?.Function?.Call(scoreKeeper);
         }
     }

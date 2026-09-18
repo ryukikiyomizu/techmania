@@ -19,8 +19,7 @@ public static class LoadProbeBuild
             scenes = scenes,
             locationPathName = Path.Combine(output, "TECHMANIA.exe"),
             target = BuildTarget.StandaloneWindows64,
-            options = BuildOptions.None,
-            extraScriptingDefines = new[] { "TECHMANIA_HUMAN_PLAYTESTER" }
+            options = BuildOptions.None
         });
         if (report.summary.result != BuildResult.Succeeded)
             throw new Exception("Probe build failed: " + report.summary.result +
