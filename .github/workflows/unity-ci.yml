@@ -259,7 +259,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path Logs | Out-Null
-          $unity = Join-Path $env:UNITY_EDITOR_PATH Unity.exe
+          # buildalon/unity-setup exports UNITY_EDITOR_PATH as the *file*, not the Editor
+          # folder, so appending Unity.exe here produced "not found" for several runs.
+          $unity = $env:UNITY_EDITOR_PATH
+          if ($unity -notmatch 'Unity(\.exe)?$') { $unity = Join-Path $unity 'Unity.exe' }
+          if ($unity -notmatch "\.exe$") { $unity += '.exe' }
           $log = Join-Path $env:GITHUB_WORKSPACE "Logs\import.log"
           if (-not (Test-Path $unity)) {
             "::error::Unity.exe not found. UNITY_EDITOR_PATH=[$env:UNITY_EDITOR_PATH] cwd=$(Get-Location)"
@@ -272,12 +276,14 @@ jobs:
           # One annotation carrying everything knowable from here: the editor's exit code,
           # whether it wrote a log at all, and the tail when it did. A run costs an
           # activation, so this step has to answer the question on its own.
+          $flat = ''
           if (Test-Path $log) {
-            $flat = ((Get-Content $log -Tail 30 -ErrorAction SilentlyContinue) -join ' | ') -replace '[^\x20-\x7E]','?'
-            "::error::Unity exit $code; log tail: $($flat.Substring(0,[Math]::Min(900,$flat.Length)))"
-          } else {
-            "::error::Unity exit $code and NO LOG written at $log (cwd=$(Get-Location))"
-          }
+            $pat = if ($code -eq 0) { 'error CS|Exception|Aborting|imported in|Total:' } else { '.' }
+            $flat = ((Select-String -Path $log -Pattern $pat -ErrorAction SilentlyContinue | Select-Object -Last 12).Line -join ' | ') -replace '[^\x20-\x7E]','?'
+            if (-not $flat) { $flat = ((Get-Content $log -Tail 12) -join ' | ') -replace '[^\x20-\x7E]','?' }
+          } else { $flat = "NO LOG at $log" }
+          if ($code -ne 0) { "::error::Unity exit $code; $flat" }
+          "::notice::Unity exit $code; log=$(if (Test-Path $log) {'yes'} else {'MISSING'}); $flat"
           exit $code
 
       - name: EditMode tests
@@ -285,7 +291,10 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          & (Join-Path $env:UNITY_EDITOR_PATH Unity.exe) -batchmode -nographics -quit `
+          $t = $env:UNITY_EDITOR_PATH
+          if ($t -notmatch 'Unity(\.exe)?$') { $t = Join-Path $t 'Unity.exe' }
+          if ($t -notmatch "\.exe$") { $t += '.exe' }
+          & $t -batchmode -nographics -quit `
             -projectPath (Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_PATH) `
             -runTests -testPlatform EditMode `
             -testResults (Join-Path $env:GITHUB_WORKSPACE "$env:PROJECT_PATH\TestResults\editmode.xml") `
